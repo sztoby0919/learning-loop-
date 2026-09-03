@@ -1,0 +1,6 @@
+interface:
+  display_name: "Learning Loop"
+  short_description: "用诊断、实践、测试和费曼循环建立真正可持续的学习闭环"
+  default_prompt: "Use $learning-loop to help me systematically learn a new topic and keep a learning journal."
+policy:
+  allow_implicit_invocation: true

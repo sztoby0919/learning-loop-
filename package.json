@@ -1,0 +1,17 @@
+{
+  "name": "learning-loop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["dashboard"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dashboard": "npm --prefix dashboard run start",
+    "dashboard:dev": "npm --prefix dashboard run dev",
+    "test": "npm --prefix dashboard test",
+    "test:e2e": "npm --prefix dashboard run test:e2e",
+    "build": "npm --prefix dashboard run build"
+  }
+}

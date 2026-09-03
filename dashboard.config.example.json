@@ -1,0 +1,5 @@
+{
+  "courses": [
+    { "root": "examples/demo-course", "enabled": true }
+  ]
+}

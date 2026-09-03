@@ -1,0 +1,162 @@
+export type CourseId = string;
+
+export type ArtifactKind = "course" | "notes" | "reviews" | "resources" | "schedule" | "sessions";
+export type ArtifactStatus = "ready" | "missing" | "invalid";
+
+export interface CourseArtifactHealth {
+  artifact: ArtifactKind;
+  status: ArtifactStatus;
+  sourcePath: string;
+  updated: string | null;
+  warning?: string;
+  count?: number;
+}
+
+export interface CourseTask {
+  text: string;
+  completed: boolean;
+}
+
+export interface CourseStage {
+  title: string;
+  tasks: CourseTask[];
+}
+
+export interface StudyRecord {
+  date: string;
+  content: string;
+  mastery: number | null;
+  difficulty: string;
+  nextStep: string;
+}
+
+export interface CourseSummary {
+  id: CourseId;
+  title: string;
+  shortTitle?: string;
+  accent: string;
+  updated: string;
+  order?: number;
+  archived?: boolean;
+  status: "ready" | "missing" | "invalid";
+  progress: number | null;
+  completedTasks: number;
+  totalTasks: number;
+  currentStage: string | null;
+  nextTask: string | null;
+  mastery: number | null;
+  warning?: string;
+  artifacts?: CourseArtifactHealth[];
+}
+
+export interface CourseDetail extends CourseSummary {
+  overviewMarkdown: string;
+  keyPointsMarkdown: string;
+  mistakesMarkdown: string;
+  stages: CourseStage[];
+  records: StudyRecord[];
+  warnings: string[];
+  sourcePath: string;
+}
+
+export interface CoursesResponse {
+  courses: CourseSummary[];
+  recentRecords: Array<StudyRecord & { courseId: CourseId; courseTitle: string; accent: string }>;
+  warningCount: number;
+}
+
+export interface TaskReference extends CourseTask {
+  courseId: CourseId;
+  courseTitle: string;
+  accent: string;
+  stage: string;
+}
+
+export interface NoteDocument {
+  courseId: CourseId;
+  title?: string;
+  accent?: string;
+  groupId?: string;
+  groupTitle?: string;
+  isStandalone?: boolean;
+  updated: string;
+  markdown: string;
+  headings: string[];
+  warnings: string[];
+}
+
+export type ReviewStatus = "unscheduled" | "upcoming" | "today" | "overdue";
+
+export interface ReviewItem {
+  courseId: CourseId;
+  topic: string;
+  lastReviewed: string | null;
+  nextReview: string | null;
+  mastery: number | null;
+  evidence: string;
+  status: ReviewStatus;
+}
+
+export interface ReviewDocument {
+  courseId: CourseId;
+  updated: string;
+  items: ReviewItem[];
+  warnings: string[];
+}
+
+export interface ResourceItem {
+  courseId: CourseId;
+  name: string;
+  type: string;
+  location: string;
+  stage: string;
+  status: string;
+  note: string;
+}
+
+export interface ResourceDocument {
+  courseId: CourseId;
+  updated: string;
+  items: ResourceItem[];
+  warnings: string[];
+}
+
+export interface ScheduleItem {
+  courseId: CourseId;
+  date: string;
+  type: string;
+  title: string;
+  stage: string;
+  status: string;
+  note: string;
+}
+
+export interface ScheduleDocument {
+  courseId: CourseId;
+  updated: string;
+  items: ScheduleItem[];
+  warnings: string[];
+}
+
+export interface CalendarEvent {
+  id: string;
+  courseId: CourseId;
+  courseTitle: string;
+  accent: string;
+  date: string;
+  kind: "schedule" | "review" | "record";
+  title: string;
+  status: string;
+  detail: string;
+}
+
+export interface LearningStats {
+  completedTasks: number;
+  totalTasks: number;
+  completionRate: number | null;
+  averageMastery: number | null;
+  recordCount: number;
+  dueReviewCount: number;
+  resourceStatusCounts: Record<string, number>;
+  courses: Array<{ courseId: CourseId; title: string; accent: string; progress: number | null; mastery: number | null; recordCount: number }>;
+}
