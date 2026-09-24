@@ -15,6 +15,11 @@ const CourseDetailPage = lazy(async () => {
   return { default: module.CourseDetailPage };
 });
 
+const CourseCoachPage = lazy(async () => {
+  const module = await import("./pages/CourseCoachPage.js");
+  return { default: module.CourseCoachPage };
+});
+
 const CalendarPage = lazy(async () => ({ default: (await import("./pages/CalendarPage.js")).CalendarPage }));
 const CoursesPage = lazy(async () => ({ default: (await import("./pages/CoursesPage.js")).CoursesPage }));
 const NotesPage = lazy(async () => ({ default: (await import("./pages/NotesPage.js")).NotesPage }));
@@ -60,6 +65,12 @@ function CourseRoute() {
   return <KnownCourseRoute id={id} />;
 }
 
+function CourseCoachRoute() {
+  const id = useParams().id as CourseId;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return <Navigate to="/" replace />;
+  return <KnownCourseCoachRoute id={id} />;
+}
+
 function KnownCourseRoute({ id }: { id: CourseId }) {
   const state = useCourseDetail(id);
   const detail = state.data && "stages" in state.data ? state.data as CourseDetail : null;
@@ -72,6 +83,24 @@ function KnownCourseRoute({ id }: { id: CourseId }) {
       {detail && (
         <Suspense fallback={<LoadingState />}>
           <CourseDetailPage course={detail} />
+        </Suspense>
+      )}
+    </AppShell>
+  );
+}
+
+function KnownCourseCoachRoute({ id }: { id: CourseId }) {
+  const state = useCourseDetail(id);
+  const detail = state.data && "stages" in state.data ? state.data as CourseDetail : null;
+
+  return (
+    <AppShell connection={state.connection}>
+      {state.loading && <LoadingState />}
+      {state.error && <ErrorState message={state.error} />}
+      {state.data && !detail && <ErrorState message={state.data.warning ?? "course.md 尚未准备好"} />}
+      {detail && (
+        <Suspense fallback={<LoadingState />}>
+          <CourseCoachPage course={detail} onComplete={() => {}} />
         </Suspense>
       )}
     </AppShell>
@@ -116,6 +145,7 @@ export function App() {
         <Route path="/" element={<DashboardRoute />} />
         <Route path="/courses" element={<CoursesRoute />} />
         <Route path="/courses/:id" element={<CourseRoute />} />
+        <Route path="/courses/:id/coach" element={<CourseCoachRoute />} />
         <Route path="/tasks" element={<TasksRoute />} />
         <Route path="/notes" element={<NotesRoute />} />
         <Route path="/notes/:id" element={<NotesRoute />} />

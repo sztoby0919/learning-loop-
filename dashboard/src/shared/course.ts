@@ -159,4 +159,7 @@ export interface LearningStats {
   dueReviewCount: number;
   resourceStatusCounts: Record<string, number>;
   courses: Array<{ courseId: CourseId; title: string; accent: string; progress: number | null; mastery: number | null; recordCount: number }>;
+  evidenceBasedMastery?: number | null; // 有证据的掌握度（来自诊断）
+  weakPointCount?: number; // 待修复知识点数
+  diagnosisCount?: number; // 诊断次数
 }

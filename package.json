@@ -12,6 +12,8 @@
     "dashboard:dev": "npm --prefix dashboard run dev",
     "test": "npm --prefix dashboard test",
     "test:e2e": "npm --prefix dashboard run test:e2e",
-    "build": "npm --prefix dashboard run build"
+    "build": "npm --prefix dashboard run build",
+    "check": "bash scripts/check.sh",
+    "scan:secrets": "bash scripts/scan-secrets.sh"
   }
 }

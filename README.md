@@ -13,7 +13,7 @@ npm install
 npm run dashboard
 ```
 
-打开 <http://127.0.0.1:4174>，默认会显示 `examples/demo-course`。
+打开 <http://127.0.0.1:3000>，默认会显示 `examples/demo-course`。
 
 常用命令：
 
