@@ -1,102 +1,45 @@
-// Diff 预览组件
-// 显示 AI 建议的修改前后对比
-
 import type { DiagnosisResult } from "../../server/ai-types.js";
 
-interface DiffPreviewProps {
+export interface FileChange {
+  name: string;
+  before: string | null;
+  after: string;
+}
+
+export function DiffPreview({ diagnosis, files, onConfirm, onReject, isApplying }: {
   diagnosis: DiagnosisResult;
+  files: FileChange[];
   onConfirm: () => void;
   onReject: () => void;
   isApplying: boolean;
-}
-
-export function DiffPreview({ diagnosis, onConfirm, onReject, isApplying }: DiffPreviewProps) {
-  return (
-    <div className="diff-preview" role="dialog" aria-label="诊断结果预览">
-      <header className="diff-preview__header">
-        <h3>诊断结果与修改建议</h3>
-        <p className="diff-preview__subtitle">
-          以下修改将在您确认后应用到学习档案
-        </p>
-      </header>
-
-      <section className="diff-preview__section">
-        <h4>发现的薄弱知识点</h4>
-        {diagnosis.weakPoints.length === 0 ? (
-          <p className="empty-copy">未发现明显薄弱点，继续保持！</p>
-        ) : (
-          <ul className="weak-points-list">
-            {diagnosis.weakPoints.map((point, index) => (
-              <li key={index} className={`weak-point weak-point--${point.severity}`}>
-                <div className="weak-point__header">
-                  <strong>{point.knowledgePoint}</strong>
-                  <span className={`severity-badge severity-badge--${point.severity}`}>
-                    {point.severity === "high" ? "高优先级" : point.severity === "medium" ? "中优先级" : "低优先级"}
-                  </span>
-                </div>
-                <p className="weak-point__evidence">证据：{point.evidence}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="diff-preview__section">
-        <h4>建议的补救任务</h4>
-        {diagnosis.remediationTasks.length === 0 ? (
-          <p className="empty-copy">无需额外补救任务</p>
-        ) : (
-          <ol className="remediation-list">
-            {diagnosis.remediationTasks.map((task, index) => (
-              <li key={index}>{task}</li>
-            ))}
-          </ol>
-        )}
-      </section>
-
-      <section className="diff-preview__section">
-        <h4>下次复习时间</h4>
-        <p className="next-review-date">{diagnosis.nextReviewDate}</p>
-      </section>
-
-      <section className="diff-preview__section diff-preview__changes">
-        <h4>将修改的文件</h4>
-        <div className="file-changes">
-          <div className="file-change">
-            <span className="file-change__name">course.md</span>
-            <pre className="file-change__diff">{diagnosis.proposedChanges.courseMarkdown}</pre>
-          </div>
-          <div className="file-change">
-            <span className="file-change__name">reviews.md</span>
-            <pre className="file-change__diff">{diagnosis.proposedChanges.reviewsMarkdown}</pre>
-          </div>
-          <div className="file-change">
-            <span className="file-change__name">mistakes.md</span>
-            <pre className="file-change__diff">{diagnosis.proposedChanges.mistakesMarkdown}</pre>
-          </div>
-          <div className="file-change">
-            <span className="file-change__name">sessions/ 新增记录</span>
-            <pre className="file-change__diff">{diagnosis.proposedChanges.sessionMarkdown}</pre>
-          </div>
+}) {
+  return <div className="diff-preview" aria-label="诊断结果预览">
+    <header className="diff-preview__header">
+      <h3>诊断结果与修改建议</h3>
+      <p>请检查以下真实文件内容，确认后才会写入。</p>
+    </header>
+    <section className="diff-preview__section">
+      <h4>薄弱知识点与证据</h4>
+      {diagnosis.weakPoints.length ? <ul>{diagnosis.weakPoints.map((point, index) => <li key={index}><strong>{point.knowledgePoint}</strong>（{point.severity === "high" ? "高" : point.severity === "medium" ? "中" : "低"}优先级）：{point.evidence}</li>)}</ul> : <p>本次未发现明显薄弱点。</p>}
+    </section>
+    <section className="diff-preview__section">
+      <h4>补救任务与复习</h4>
+      <ol>{diagnosis.remediationTasks.map((task, index) => <li key={index}>{task}</li>)}</ol>
+      <p>下次复习：{diagnosis.nextReviewDate}</p>
+    </section>
+    <section className="diff-preview__section diff-preview__changes">
+      <h4>文件修改前后</h4>
+      {files.map((file) => <div className="file-change" key={file.name}>
+        <h5>{file.name}</h5>
+        <div className="file-change__comparison">
+          <div><strong>修改前</strong><pre className="file-change__diff">{file.before ?? "（新文件）"}</pre></div>
+          <div><strong>修改后</strong><pre className="file-change__diff">{file.after}</pre></div>
         </div>
-      </section>
-
-      <footer className="diff-preview__footer">
-        <button
-          className="btn btn--primary"
-          onClick={onConfirm}
-          disabled={isApplying}
-        >
-          {isApplying ? "正在应用..." : "确认应用修改"}
-        </button>
-        <button
-          className="btn btn--secondary"
-          onClick={onReject}
-          disabled={isApplying}
-        >
-          拒绝修改
-        </button>
-      </footer>
-    </div>
-  );
+      </div>)}
+    </section>
+    <footer className="diff-preview__footer">
+      <button className="btn btn--primary" onClick={onConfirm} disabled={isApplying}>{isApplying ? "正在应用..." : "确认应用修改"}</button>
+      <button className="btn btn--secondary" onClick={onReject} disabled={isApplying}>拒绝修改</button>
+    </footer>
+  </div>;
 }

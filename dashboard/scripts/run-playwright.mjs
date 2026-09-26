@@ -8,6 +8,8 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const environment = {
   ...withoutProxyEnvironment(process.env),
   PORT: String(port),
+  AI_API_KEY: "",
+  AI_MODE: "mock",
 };
 const server = spawn(process.execPath, ["--import", "tsx/esm", "src/server/index.ts"], {
   cwd: process.cwd(),

@@ -1,0 +1,68 @@
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+
+import type { ExtractedPdf } from "./course-import.js";
+
+export class PdfImportError extends Error {
+  constructor(readonly code: "INVALID_PDF" | "ENCRYPTED" | "NO_TEXT" | "TOO_MANY_PAGES", message: string) {
+    super(message);
+  }
+}
+
+const chapterPattern = /^(?:第\s*[一二三四五六七八九十百零〇\d]+\s*[章节篇]|chapter\s+\d+\b|\d+[.、]\s*\S)/i;
+
+export async function extractPdf(bytes: Uint8Array, filename: string): Promise<ExtractedPdf> {
+  if (bytes.length < 8 || Buffer.from(bytes.subarray(0, 5)).toString("ascii") !== "%PDF-") {
+    throw new PdfImportError("INVALID_PDF", "文件不是有效 PDF");
+  }
+  let loadingTask: ReturnType<typeof getDocument> | undefined;
+  try {
+    // PDF.js may transfer/detach its input buffer; keep the caller's bytes for source.pdf.
+    loadingTask = getDocument({ data: new Uint8Array(bytes), useSystemFonts: true });
+    const document = await loadingTask.promise;
+    if (document.numPages > 1000) throw new PdfImportError("TOO_MANY_PAGES", "PDF 超过 1,000 页，请拆分后导入");
+    const pages: ExtractedPdf["pages"] = [];
+    const inferred: ExtractedPdf["outline"] = [];
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = content.items.flatMap((item) => "str" in item ? [item.str] : []).join(" ").replace(/\s+/g, " ").trim();
+      pages.push({ page: pageNumber, text });
+      if (chapterPattern.test(text.slice(0, 100))) {
+        inferred.push({ title: text.slice(0, 90), page: pageNumber });
+      }
+      page.cleanup();
+    }
+    if (pages.reduce((sum, page) => sum + page.text.length, 0) < 5) {
+      throw new PdfImportError("NO_TEXT", "无法从 PDF 提取足够文字；扫描版 PDF 暂不支持，请使用可复制文字的版本");
+    }
+    const outline: ExtractedPdf["outline"] = [];
+    const bookmarks = await document.getOutline();
+    for (const item of bookmarks ?? []) {
+      if (!item.dest) continue;
+      const destination = typeof item.dest === "string" ? await document.getDestination(item.dest) : item.dest;
+      if (!destination?.length) continue;
+      const first = destination[0];
+      try {
+        const index = typeof first === "object" && first !== null ? await document.getPageIndex(first) : Number(first);
+        if (Number.isInteger(index) && index >= 0 && index < document.numPages) outline.push({ title: item.title, page: index + 1 });
+      } catch { /* A broken bookmark should not block import. */ }
+    }
+    const metadata = await document.getMetadata().catch(() => null);
+    const infoTitle = metadata?.info && "Title" in metadata.info && typeof metadata.info.Title === "string" ? metadata.info.Title.trim() : "";
+    return {
+      title: infoTitle || filename.replace(/\.pdf$/i, ""),
+      pageCount: document.numPages,
+      pages,
+      outline: outline.length ? outline : inferred,
+      warnings: pages.some((page) => !page.text) ? ["部分页面没有可提取文字，可能包含图片或扫描内容。"] : [],
+    };
+  } catch (error) {
+    if (error instanceof PdfImportError) throw error;
+    if (error instanceof Error && /password|encrypted/i.test(`${error.name} ${error.message}`)) {
+      throw new PdfImportError("ENCRYPTED", "PDF 已加密或需要密码，请先提供未加密版本");
+    }
+    throw new PdfImportError("INVALID_PDF", "PDF 损坏或无法解析，请检查文件后重试");
+  } finally {
+    await loadingTask?.destroy().catch(() => {});
+  }
+}

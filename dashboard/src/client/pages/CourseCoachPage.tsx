@@ -1,218 +1,76 @@
-// 学习诊断页面组件
-// 逐题展示、作答、反馈，最后生成诊断报告
+import { useState } from "react";
 
-import { useState, useCallback } from "react";
 import type { CourseDetail } from "../../shared/course.js";
-import type { AssessmentQuestion, AnswerFeedback, DiagnosisResult } from "../../server/ai-types.js";
-import { DiffPreview } from "../components/DiffPreview.js";
+import type { AnswerFeedback, DiagnosisResult, PublicAssessmentQuestion } from "../../server/ai-types.js";
+import { DiffPreview, type FileChange } from "../components/DiffPreview.js";
 
-interface CourseCoachPageProps {
-  course: CourseDetail;
-  onComplete: (result: DiagnosisResult) => void;
+type Phase = "intro" | "loading" | "question" | "feedback" | "report" | "applying" | "applied" | "error";
+
+async function api<T>(url: string, body?: object): Promise<T> {
+  const response = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(payload.error ?? `请求失败 (${response.status})`);
+  }
+  return response.json() as Promise<T>;
 }
 
-type CoachState =
-  | { phase: "intro" }
-  | { phase: "loading_questions" }
-  | { phase: "answering"; questions: AssessmentQuestion[]; currentIndex: number; answers: Array<{ question: AssessmentQuestion; answer: string; feedback: AnswerFeedback }> }
-  | { phase: "diagnosing" }
-  | { phase: "review"; diagnosis: DiagnosisResult; answers: Array<{ question: AssessmentQuestion; answer: string; feedback: AnswerFeedback }> }
-  | { phase: "applied"; diagnosis: DiagnosisResult }
-  | { phase: "error"; message: string };
+export function CourseCoachPage({ course, onComplete }: { course: CourseDetail; onComplete: (result: DiagnosisResult) => void }) {
+  const [phase, setPhase] = useState<Phase>("intro");
+  const [assessmentId, setAssessmentId] = useState("");
+  const [question, setQuestion] = useState<PublicAssessmentQuestion | null>(null);
+  const [nextQuestion, setNextQuestion] = useState<PublicAssessmentQuestion | null>(null);
+  const [total, setTotal] = useState(0);
+  const [answered, setAnswered] = useState(0);
+  const [answer, setAnswer] = useState("");
+  const [feedback, setFeedback] = useState<AnswerFeedback | null>(null);
+  const [diagnosis, setDiagnosis] = useState<DiagnosisResult | null>(null);
+  const [files, setFiles] = useState<FileChange[]>([]);
+  const [error, setError] = useState("");
 
-export function CourseCoachPage({ course, onComplete }: CourseCoachPageProps) {
-  const [state, setState] = useState<CoachState>({ phase: "intro" });
+  const fail = (cause: unknown) => { setError(cause instanceof Error ? cause.message : "未知错误"); setPhase("error"); };
 
-  const startDiagnosis = useCallback(async () => {
-    setState({ phase: "loading_questions" });
+  async function start() {
+    setPhase("loading");
     try {
-      // 调用 API 创建诊断
-      const response = await fetch("/api/ai/assessments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseId: course.id,
-          topic: course.title,
-          count: 5,
-          difficulty: "medium",
-          context: course.keyPointsMarkdown,
-        }),
-      });
-      if (!response.ok) throw new Error("创建诊断失败");
-      const data = await response.json();
-      setState({
-        phase: "answering",
-        questions: data.questions,
-        currentIndex: 0,
-        answers: [],
-      });
-    } catch (error) {
-      setState({ phase: "error", message: error instanceof Error ? error.message : "未知错误" });
-    }
-  }, [course]);
-
-  const submitAnswer = useCallback(async (answer: string) => {
-    if (state.phase !== "answering") return;
-    const currentQuestion = state.questions[state.currentIndex];
-    try {
-      const response = await fetch(`/api/ai/assessments/${currentQuestion.id}/answers`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          questionId: currentQuestion.id,
-          answer,
-          context: course.keyPointsMarkdown,
-        }),
-      });
-      if (!response.ok) throw new Error("提交答案失败");
-      const feedback: AnswerFeedback = await response.json();
-
-      const newAnswers = [...state.answers, { question: currentQuestion, answer, feedback }];
-      const nextIndex = state.currentIndex + 1;
-
-      if (nextIndex >= state.questions.length) {
-        // 所有题目作答完成，开始诊断
-        setState({ phase: "diagnosing" });
-        const diagResponse = await fetch(`/api/ai/assessments/${course.id}/diagnosis`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            courseId: course.id,
-            answers: newAnswers,
-            learningRecords: course.records,
-          }),
-        });
-        if (!diagResponse.ok) throw new Error("生成诊断结果失败");
-        const diagnosis: DiagnosisResult = await diagResponse.json();
-        setState({ phase: "review", diagnosis, answers: newAnswers });
-      } else {
-        setState({
-          phase: "answering",
-          questions: state.questions,
-          currentIndex: nextIndex,
-          answers: newAnswers,
-        });
-      }
-    } catch (error) {
-      setState({ phase: "error", message: error instanceof Error ? error.message : "未知错误" });
-    }
-  }, [state, course]);
-
-  const applyDiagnosis = useCallback(async () => {
-    if (state.phase !== "review") return;
-    try {
-      const response = await fetch(`/api/ai/assessments/${course.id}/apply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseId: course.id,
-          diagnosis: state.diagnosis,
-        }),
-      });
-      if (!response.ok) throw new Error("应用修改失败");
-      setState({ phase: "applied", diagnosis: state.diagnosis });
-      onComplete(state.diagnosis);
-    } catch (error) {
-      setState({ phase: "error", message: error instanceof Error ? error.message : "未知错误" });
-    }
-  }, [state, course, onComplete]);
-
-  const rejectDiagnosis = useCallback(() => {
-    setState({ phase: "intro" });
-  }, []);
-
-  // 渲染不同阶段
-  switch (state.phase) {
-    case "intro":
-      return (
-        <div className="coach-intro">
-          <h2>学习诊断</h2>
-          <p>通过作答来发现你的知识漏洞，AI 会生成针对性的补救方案。</p>
-          <div className="coach-intro__info">
-            <p>📋 课程：{course.title}</p>
-            <p>📝 将生成 5 道简答题</p>
-            <p>⏱️ 预计耗时 5-10 分钟</p>
-          </div>
-          <button className="btn btn--primary" onClick={startDiagnosis}>
-            开始诊断
-          </button>
-        </div>
-      );
-
-    case "loading_questions":
-      return (
-        <div className="coach-loading">
-          <div className="spinner" aria-hidden="true" />
-          <p>AI 正在生成诊断题目...</p>
-        </div>
-      );
-
-    case "answering": {
-      const currentQuestion = state.questions[state.currentIndex];
-      return (
-        <div className="coach-answering">
-          <div className="coach-progress">
-            题目 {state.currentIndex + 1} / {state.questions.length}
-          </div>
-          <h3>{currentQuestion.question}</h3>
-          <div className="coach-options">
-            {currentQuestion.options.map((option, index) => (
-              <button
-                key={index}
-                className="coach-option"
-                onClick={() => submitAnswer(option)}
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-          {state.answers.length > 0 && (
-            <div className="coach-previous-feedback">
-              <p>上一题反馈：{state.answers[state.answers.length - 1].feedback.evidence}</p>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    case "diagnosing":
-      return (
-        <div className="coach-loading">
-          <div className="spinner" aria-hidden="true" />
-          <p>AI 正在分析你的作答...</p>
-        </div>
-      );
-
-    case "review":
-      return (
-        <DiffPreview
-          diagnosis={state.diagnosis}
-          onConfirm={applyDiagnosis}
-          onReject={rejectDiagnosis}
-          isApplying={false}
-        />
-      );
-
-    case "applied":
-      return (
-        <div className="coach-applied">
-          <h3>诊断完成！</h3>
-          <p>已将 {state.diagnosis.weakPoints.length} 个薄弱点记录到学习档案。</p>
-          <p>下次复习时间：{state.diagnosis.nextReviewDate}</p>
-          <button className="btn btn--primary" onClick={() => setState({ phase: "intro" })}>
-            返回
-          </button>
-        </div>
-      );
-
-    case "error":
-      return (
-        <div className="coach-error" role="alert">
-          <p>出错了：{state.message}</p>
-          <button className="btn btn--secondary" onClick={() => setState({ phase: "intro" })}>
-            重试
-          </button>
-        </div>
-      );
+      const result = await api<{ assessmentId: string; total: number; question: PublicAssessmentQuestion }>("/api/ai/assessments", { courseId: course.id });
+      setAssessmentId(result.assessmentId); setTotal(result.total); setAnswered(0); setQuestion(result.question); setAnswer(""); setPhase("question");
+    } catch (cause) { fail(cause); }
   }
+
+  async function submit() {
+    if (!question || !answer.trim()) return;
+    setPhase("loading");
+    try {
+      const result = await api<{ feedback: AnswerFeedback; nextQuestion: PublicAssessmentQuestion | null; answered: number }>(`/api/ai/assessments/${assessmentId}/answers`, { questionId: question.id, answer });
+      setFeedback(result.feedback); setNextQuestion(result.nextQuestion); setAnswered(result.answered); setPhase("feedback");
+    } catch (cause) { fail(cause); }
+  }
+
+  async function showReport() {
+    if (nextQuestion) { setQuestion(nextQuestion); setAnswer(""); setFeedback(null); setPhase("question"); return; }
+    setPhase("loading");
+    try {
+      const result = await api<{ diagnosis: DiagnosisResult; files: FileChange[] }>(`/api/ai/assessments/${assessmentId}/proposal`);
+      setDiagnosis(result.diagnosis); setFiles(result.files); setPhase("report");
+    } catch (cause) { fail(cause); }
+  }
+
+  async function apply() {
+    setPhase("applying");
+    try {
+      await api(`/api/ai/assessments/${assessmentId}/apply`, {});
+      setPhase("applied");
+      if (diagnosis) onComplete(diagnosis);
+    } catch (cause) { fail(cause); }
+  }
+
+  if (phase === "intro") return <div className="coach-intro"><h2>学习诊断</h2><p>围绕《{course.title}》完成单选题。每题提交后会显示正确答案与解析，不能重新选择；全部完成后可查看补救建议。</p><button className="btn btn--primary" onClick={start}>开始诊断</button></div>;
+  if (phase === "loading") return <p role="status">正在处理，请稍候…</p>;
+  if (phase === "error") return <div role="alert"><p>{error}</p><button className="btn btn--secondary" onClick={() => setPhase("intro")}>重新开始</button></div>;
+  if (phase === "question" && question) return <div className="coach-answering"><p>题目 {answered + 1} / {total} · {question.knowledgePoint}</p><h2>{question.question}</h2><fieldset className="coach-choices"><legend>选择一个答案</legend>{question.options.map((option, index) => { const letter = String.fromCharCode(65 + index); return <label className="coach-choice" key={letter}><input type="radio" name="coach-answer" value={letter} checked={answer === letter} onChange={() => setAnswer(letter)} /><span>{letter}. {option}</span></label>; })}</fieldset><button className="btn btn--primary" onClick={submit} disabled={!answer}>提交回答</button></div>;
+  if (phase === "feedback" && feedback) return <div className="coach-feedback"><h2>第 {answered} 题反馈</h2><p>{feedback.isCorrect ? "回答正确" : "回答错误"} · 得分：{feedback.score} / 100</p><p>正确答案：{feedback.correctPart}</p>{feedback.gap && <p>{feedback.gap}</p>}<p>解析：{feedback.evidence}</p><button className="btn btn--primary" onClick={showReport}>{nextQuestion ? "下一题" : "查看诊断报告"}</button></div>;
+  if ((phase === "report" || phase === "applying") && diagnosis) return <DiffPreview diagnosis={diagnosis} files={files} onConfirm={apply} onReject={() => setPhase("intro")} isApplying={phase === "applying"} />;
+  if (phase === "applied") return <div className="coach-applied"><h2>诊断完成</h2><p>学习档案已更新。下次复习：{diagnosis?.nextReviewDate}</p><a href="/review" className="btn btn--primary">查看复习任务</a></div>;
+  return null;
 }

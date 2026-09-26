@@ -1,4 +1,4 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import matter from "gray-matter";
@@ -33,7 +33,7 @@ export interface DashboardConfig {
 
 const COURSE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
-export async function loadDashboardConfig(configPath: string): Promise<DashboardConfig> {
+export async function loadDashboardConfig(configPath: string, managedRoot?: string): Promise<DashboardConfig> {
   const absoluteConfigPath = path.resolve(configPath);
   const raw = await readFile(absoluteConfigPath, "utf8");
   const parsed = JSON.parse(raw) as {
@@ -59,6 +59,28 @@ export async function loadDashboardConfig(configPath: string): Promise<Dashboard
     if (ids.has(id)) throw new Error(`重复课程 ID“${id}”`);
     ids.add(id);
     courses.push({ id, root, enabled: true });
+  }
+
+  if (managedRoot) {
+    const entries = await readdir(managedRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const root = path.join(managedRoot, entry.name);
+      const coursePath = path.join(root, "course.md");
+      const raw = await readFile(coursePath, "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (raw === null) continue;
+      const id = String(matter(raw).data.id ?? "");
+      if (!COURSE_ID_PATTERN.test(id) || id !== entry.name) throw new Error(`${coursePath}: 托管课程 ID 无效`);
+      if (ids.has(id)) throw new Error(`重复课程 ID“${id}”`);
+      ids.add(id);
+      courses.push({ id, root: await realpath(root), enabled: true });
+    }
   }
 
   const standaloneNotes: ConfiguredStandaloneNote[] = [];

@@ -23,6 +23,8 @@ export default defineConfig({
     url: `http://127.0.0.1:${e2ePort}/api/courses`,
     env: {
       PORT: String(e2ePort),
+      AI_API_KEY: "",
+      AI_MODE: "mock",
       NO_PROXY: "127.0.0.1,localhost",
       no_proxy: "127.0.0.1,localhost",
     },

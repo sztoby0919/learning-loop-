@@ -1,6 +1,3 @@
-// AI 服务类型定义
-// 定义所有 AI 功能的输入输出结构
-
 export interface LearningRecord {
   date: string;
   content: string;
@@ -18,10 +15,17 @@ export interface AssessmentQuestion {
   knowledgePoint: string;
 }
 
+export interface PublicAssessmentQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  knowledgePoint: string;
+}
+
 export interface AnswerFeedback {
   questionId: string;
   isCorrect: boolean;
-  score: number; // 0-100
+  score: number;
   correctPart: string;
   gap: string;
   evidence: string;
@@ -45,23 +49,9 @@ export interface DiagnosisResult {
   };
 }
 
-export interface AiAssessment {
-  id: string;
-  courseId: string;
-  questions: AssessmentQuestion[];
-  answers: Array<{
-    questionId: string;
-    answer: string;
-    feedback: AnswerFeedback;
-  }>;
-  diagnosis: DiagnosisResult | null;
-  status: "in_progress" | "completed" | "failed";
-  createdAt: string;
-}
-
 export interface AiConfig {
   baseUrl: string;
-  apiKey: <REDACTED>
+  apiKey: string;
   model: string;
   maxTokens: number;
   temperature: number;

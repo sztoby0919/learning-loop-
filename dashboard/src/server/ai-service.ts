@@ -26,7 +26,7 @@ export class AiService {
   constructor(config: AiServiceConfig) {
     this.provider = config.provider;
     this.maxRetries = config.maxRetries ?? 1;
-    this.timeoutMs = config.timeoutMs ?? 30000;
+    this.timeoutMs = config.timeoutMs ?? 90000;
   }
 
   // 生成诊断题目

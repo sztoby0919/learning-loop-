@@ -1,7 +1,7 @@
 ---
 id: calculus-101
 title: 微积分基础
-accent: #1f5a43
+accent: "#1f5a43"
 updated: 2025-09-01
 order: 1
 ---

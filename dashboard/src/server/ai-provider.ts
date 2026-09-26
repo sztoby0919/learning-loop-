@@ -1,5 +1,5 @@
 // AI Provider 接口和实现
-// 支持 LongCat 2.0 和 Mock 两种模式
+// 支持 OpenAI 兼容的文本模型 API 和离线 Mock
 
 import type {
   AiConfig,
@@ -9,7 +9,7 @@ import type {
   DiagnosisResult,
   LearningRecord,
 } from "./ai-types.js";
-import { LongCatAiProvider } from "./longcat-provider.js";
+import { OpenAiCompatibleProvider } from "./openai-compatible-provider.js";
 
 // Provider 接口
 export interface AiProvider {
@@ -82,15 +82,25 @@ export class MockAiProvider implements AiProvider {
     const start = Date.now();
     await this.delay(300);
 
-    // 基于主题生成模拟问题
-    const questions: AssessmentQuestion[] = Array.from({ length: params.count }, (_, i) => ({
-      id: `q-${params.courseId}-${Date.now()}-${i}`,
-      question: `关于"${params.topic}"的第 ${i + 1} 道诊断题（难度：${params.difficulty}）`,
-      options: ["选项 A", "选项 B", "选项 C", "选项 D"],
-      answer: "选项 A",
-      explanation: `这道题考察的是"${params.topic}"中的核心概念。`,
-      knowledgePoint: `${params.topic} - 知识点 ${i + 1}`,
-    }));
+    const reference = params.context.includes("瞬时变化率") ? "瞬时变化率" : params.topic;
+    const questions: AssessmentQuestion[] = Array.from({ length: params.count }, (_, i) => {
+      const correctIndex = i % 4;
+      const options = [
+        `把${params.topic}看成一个固定数值`,
+        `只描述${params.topic}的历史背景`,
+        `将${params.topic}等同于所有相关概念`,
+        `与${params.topic}无关的结论`,
+      ];
+      options[correctIndex] = reference;
+      return {
+        id: `q-${params.courseId}-${Date.now()}-${i}`,
+        question: `关于${params.topic}，哪一项最符合课程内容？（第 ${i + 1} 题，离线演示）`,
+        options,
+        answer: String.fromCharCode(65 + correctIndex),
+        explanation: `课程内容指出：${reference}。其他选项不符合这一表述。`,
+        knowledgePoint: params.topic,
+      };
+    });
 
     this.recordRun({
       promptTokens: 50 + params.context.length / 4,
@@ -111,8 +121,8 @@ export class MockAiProvider implements AiProvider {
     const start = Date.now();
     await this.delay(200);
 
-    const isCorrect = params.answer === params.question.answer;
-    const score = isCorrect ? 90 + Math.floor(Math.random() * 10) : 20 + Math.floor(Math.random() * 40);
+    const isCorrect = params.answer.includes(params.question.answer);
+    const score = isCorrect ? 90 : 30;
 
     const feedback: AnswerFeedback = {
       questionId: params.question.id,
@@ -121,9 +131,7 @@ export class MockAiProvider implements AiProvider {
       correctPart: isCorrect ? "回答完全正确" : "部分理解有偏差",
       gap: isCorrect ? "无明显缺口" : `对"${params.question.knowledgePoint}"的理解需要加强`,
       evidence: `作答"${params.answer}"，正确答案为"${params.question.answer}"`,
-      feynmanExplanation: isCorrect
-        ? undefined
-        : `让我用简单的方式解释"${params.question.knowledgePoint}"：这就像...`,
+      feynmanExplanation: isCorrect ? undefined : params.question.explanation,
     };
 
     this.recordRun({
@@ -206,7 +214,10 @@ export class MockAiProvider implements AiProvider {
     return result;
   }
 
-  async generateRemediationTasks(params): Promise<string[]> {
+  async generateRemediationTasks(params: {
+    weakPoints: DiagnosisResult["weakPoints"];
+    currentLevel: string;
+  }): Promise<string[]> {
     const start = Date.now();
     await this.delay(200);
 
@@ -236,9 +247,9 @@ export class MockAiProvider implements AiProvider {
 
 // 工厂函数 - 根据配置创建 Provider
 export function createAiProvider(config: AiConfig): AiProvider {
-  // 如果配置了 API Key，使用 LongCat
+  // 如果配置了 API Key，使用兼容的真实模型接口
   if (config.apiKey && config.apiKey !== "") {
-    return new LongCatAiProvider(config);
+    return new OpenAiCompatibleProvider(config);
   }
   // 否则使用 Mock
   return new MockAiProvider(config);

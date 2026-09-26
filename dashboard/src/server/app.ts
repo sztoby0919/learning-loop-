@@ -1,20 +1,30 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFile } from "node:fs/promises";
 
 import express from "express";
+import multer from "multer";
 
 import type { CourseId } from "../shared/course.js";
 import type { CourseEventBus } from "./course-events.js";
 import type { WorkspaceRepository } from "./workspace-repository.js";
 import type { AiService } from "./ai-service.js";
-import type { DiagnosisResult } from "./ai-types.js";
-import { batchAtomicWrite, computeFileHash } from "./file-utils.js";
+import { AssessmentError, AssessmentManager } from "./assessment-manager.js";
+import { ArchiveProposalError } from "./archive-proposal.js";
+import { AiResponseFormatError } from "./openai-compatible-provider.js";
+import { CourseImportError, type CourseImportManager } from "./course-import-manager.js";
+import { CourseImportAiError } from "./course-import-ai.js";
+import { PdfImportError } from "./pdf-extractor.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(currentDirectory, "../../dist");
 
-export function createApp(repository: WorkspaceRepository, events: CourseEventBus, aiService?: AiService) {
+function decodeUploadFilename(name: string): string {
+  // Multipart parsers commonly expose browser UTF-8 filename bytes as Latin-1 text.
+  const decoded = Buffer.from(name, "latin1").toString("utf8");
+  return decoded.includes("\uFFFD") ? name : decoded;
+}
+
+export function createApp(repository: WorkspaceRepository, events: CourseEventBus, aiService?: AiService, imports?: CourseImportManager) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
@@ -42,6 +52,36 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
       next(error);
     }
   });
+
+  if (imports) {
+    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1 }, fileFilter: (_request, file, callback) => callback(null, /\.pdf$/i.test(file.originalname)) });
+    app.post("/api/course-imports", upload.single("file"), async (request, response, next) => {
+      try {
+        if (!request.file) throw new CourseImportError("请选择一个 PDF 文件", 400);
+        response.status(201).json(await imports.create(new Uint8Array(request.file.buffer), decodeUploadFilename(request.file.originalname)));
+      } catch (error) { next(error); }
+    });
+    app.get("/api/course-imports/:id", (request, response, next) => {
+      try { response.json(imports.preview(request.params.id as string)); } catch (error) { next(error); }
+    });
+    app.patch("/api/course-imports/:id", (request, response, next) => {
+      try { response.json(imports.update(request.params.id as string, request.body)); } catch (error) { next(error); }
+    });
+    app.post("/api/course-imports/:id/enrich", async (request, response, next) => {
+      try { response.json(await imports.enrich(request.params.id as string, request.body?.consent === true)); } catch (error) { next(error); }
+    });
+    app.post("/api/course-imports/:id/confirm", async (request, response, next) => {
+      try { response.status(201).json(await imports.confirm(request.params.id as string)); } catch (error) { next(error); }
+    });
+    app.delete("/api/course-imports/:id", async (request, response, next) => {
+      try { await imports.cancel(request.params.id as string); response.status(204).end(); } catch (error) { next(error); }
+    });
+    app.get("/api/courses/:id/source", (request, response, next) => {
+      const filePath = imports.sourcePath(request.params.id as string);
+      if (!filePath) { response.status(404).json({ error: "未找到原始 PDF" }); return; }
+      response.type("pdf").sendFile(filePath, (error) => { if (error && !response.headersSent) next(error); });
+    });
+  }
 
   const aggregate = <T>(pathName: string, loader: () => Promise<T>) => {
     app.get(pathName, async (_request, response, next) => {
@@ -72,121 +112,39 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     request.on("close", disconnect);
   });
 
-  // AI 诊断路由
   if (aiService) {
+    const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    const assessments = new AssessmentManager(repository, aiService, today);
     app.post("/api/ai/assessments", async (request, response, next) => {
       try {
-        const { courseId, topic, count, difficulty, context } = request.body;
-        const questions = await aiService.generateAssessmentQuestions({
-          courseId, topic, count, difficulty, context,
-        });
-        response.json({ questions });
+        const courseId = request.body?.courseId;
+        if (typeof courseId !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(courseId)) throw new AssessmentError("courseId 无效", 400);
+        response.status(201).json(await assessments.create(courseId));
       } catch (error) { next(error); }
     });
 
     app.post("/api/ai/assessments/:id/answers", async (request, response, next) => {
       try {
-        const { question, answer, context } = request.body;
-        const feedback = await aiService.submitAnswer({ question, answer, context });
-        response.json(feedback);
+        const { questionId, answer } = request.body ?? {};
+        if (typeof questionId !== "string" || typeof answer !== "string") throw new AssessmentError("答案无效", 400);
+        response.json(await assessments.answer(request.params.id as string, questionId, answer));
       } catch (error) { next(error); }
     });
 
-    app.post("/api/ai/assessments/:id/diagnosis", async (request, response, next) => {
+    app.get("/api/ai/assessments/:id/proposal", async (request, response, next) => {
       try {
-        const { answers, learningRecords } = request.body;
-        const diagnosis = await aiService.generateDiagnosis({
-          courseId: request.params.id,
-          answers,
-          learningRecords,
-        });
-        response.json(diagnosis);
+        response.json(await assessments.proposal(request.params.id as string));
       } catch (error) { next(error); }
     });
 
     app.post("/api/ai/assessments/:id/apply", async (request, response, next) => {
       try {
-        const { courseId, diagnosis, expectedHashes } = request.body as {
-          courseId: string;
-          diagnosis: DiagnosisResult;
-          expectedHashes?: Record<string, string>;
-        };
-
-        // 验证课程存在
-        const course = repository.config.courses.find((c) => c.id === courseId);
-        if (!course) {
-          response.status(404).json({ error: "未知课程" });
-          return;
+        const result = await assessments.apply(request.params.id as string);
+        for (const artifact of ["course", "reviews", "sessions"] as const) {
+          await repository.refresh(result.courseId, artifact);
+          events.publish("journal-updated", { courseId: result.courseId, artifact });
         }
-
-        // 准备写入操作
-        const operations: Array<{ filePath: string; content: string; expectedHash?: string }> = [];
-
-        // course.md 修改
-        if (diagnosis.proposedChanges.courseMarkdown) {
-          const filePath = path.join(course.root, "course.md");
-          operations.push({
-            filePath,
-            content: diagnosis.proposedChanges.courseMarkdown,
-            expectedHash: expectedHashes?.["course.md"],
-          });
-        }
-
-        // reviews.md 修改
-        if (diagnosis.proposedChanges.reviewsMarkdown) {
-          const filePath = path.join(course.root, "reviews.md");
-          operations.push({
-            filePath,
-            content: diagnosis.proposedChanges.reviewsMarkdown,
-            expectedHash: expectedHashes?.["reviews.md"],
-          });
-        }
-
-        // mistakes.md 修改（追加到现有内容）
-        if (diagnosis.proposedChanges.mistakesMarkdown) {
-          const filePath = path.join(course.root, "mistakes.md");
-          const existing = await readFile(filePath, "utf8").catch(() => "");
-          operations.push({
-            filePath,
-            content: existing + "\n" + diagnosis.proposedChanges.mistakesMarkdown,
-            expectedHash: expectedHashes?.["mistakes.md"],
-          });
-        }
-
-        // sessions/ 新增记录
-        const sessionDir = path.join(course.root, "sessions");
-        const sessionFile = path.join(sessionDir, `${new Date().toISOString().slice(0, 10)}.md`);
-        operations.push({
-          filePath: sessionFile,
-          content: diagnosis.proposedChanges.sessionMarkdown,
-        });
-
-        // 批量原子写入
-        const result = await batchAtomicWrite(operations);
-
-        if (!result.success) {
-          if (result.conflict) {
-            response.status(409).json({
-              error: result.error,
-              conflict: true,
-            });
-          } else {
-            response.status(500).json({ error: result.error });
-          }
-          return;
-        }
-
-        // 手动刷新缓存并触发事件
-        await repository.refresh(courseId, "course");
-        await repository.refresh(courseId, "reviews");
-        await repository.refresh(courseId, "sessions");
-        events.publish("journal-updated", { courseId, artifact: "course" });
-
-        response.json({
-          success: true,
-          hash: result.hash,
-          weakPointsApplied: diagnosis.weakPoints.length,
-        });
+        response.json({ success: true, weakPointsApplied: result.weakPointsApplied });
       } catch (error) { next(error); }
     });
   }
@@ -197,8 +155,24 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
   });
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-    const message = error instanceof Error ? error.message : "未知错误";
-    response.status(500).json({ error: message });
+    if (error instanceof CourseImportError) { response.status(error.status).json({ error: error.message }); return; }
+    if (error instanceof CourseImportAiError) { response.status(error.status).json({ error: error.message }); return; }
+    if (error instanceof PdfImportError) { response.status(error.code === "TOO_MANY_PAGES" ? 413 : 422).json({ error: error.message }); return; }
+    if (error instanceof multer.MulterError) { response.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ error: error.code === "LIMIT_FILE_SIZE" ? "PDF 超过 100 MB，请压缩或拆分后导入" : "请只上传一个 PDF 文件" }); return; }
+    if (error instanceof AssessmentError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    if (error instanceof AiResponseFormatError) {
+      response.status(502).json({ error: error.message });
+      return;
+    }
+    if (error instanceof ArchiveProposalError) {
+      response.status(422).json({ error: error.message });
+      return;
+    }
+    if (process.env.NODE_ENV !== "production") console.error("Unhandled API error:", error);
+    response.status(500).json({ error: "请求处理失败，请稍后重试" });
   });
 
   return app;

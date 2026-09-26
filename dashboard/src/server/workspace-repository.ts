@@ -1,5 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import matter from "gray-matter";
 
 import type {
   ArtifactKind,
@@ -18,7 +19,7 @@ import type {
   TaskReference,
 } from "../shared/course.js";
 import { parseNotesMarkdown, parseResourcesMarkdown, parseReviewsMarkdown, parseScheduleMarkdown, parseStandaloneNoteMarkdown } from "./artifact-parser.js";
-import type { DashboardConfig } from "./dashboard-config.js";
+import type { ConfiguredCourse, DashboardConfig } from "./dashboard-config.js";
 import { parseCourseMarkdown } from "./course-parser.js";
 
 type ArtifactDocument = NoteDocument | ReviewDocument | ResourceDocument | ScheduleDocument;
@@ -41,6 +42,14 @@ export class WorkspaceRepository {
   private readonly health = new Map<string, CourseArtifactHealth>();
 
   constructor(readonly config: DashboardConfig, private readonly today: () => string) {}
+
+  async addCourse(course: ConfiguredCourse): Promise<void> {
+    if (this.config.courses.some((item) => item.id === course.id || item.root === course.root)) throw new Error("课程已存在");
+    const raw = await readFile(path.join(course.root, "course.md"), "utf8");
+    if (parseCourseMarkdown(raw, path.join(course.root, "course.md")).id !== course.id) throw new Error("课程 ID 不匹配");
+    this.config.courses.push(course);
+    await Promise.all((["course", "notes", "reviews", "resources", "schedule", "sessions"] as ArtifactKind[]).map((kind) => this.refresh(course.id, kind)));
+  }
 
   private configured(id: CourseId) {
     return this.config.courses.find((course) => course.id === id);
@@ -188,10 +197,33 @@ export class WorkspaceRepository {
     const totalTasks = courses.reduce((sum, course) => sum + course.totalTasks, 0);
     const mastery = courses.flatMap((course) => course.mastery === null ? [] : [course.mastery]);
     const resourceStatusCounts = resources.reduce<Record<string, number>>((counts, resource) => ({ ...counts, [resource.status || "未设置"]: (counts[resource.status || "未设置"] ?? 0) + 1 }), {});
+    const assessments = (await Promise.all(this.config.courses.map(async (configured) => {
+      const directory = path.join(configured.root, "sessions");
+      const files = await readdir(directory).catch(() => [] as string[]);
+      return (await Promise.all(files.filter((file) => file.endsWith(".md")).map(async (file) => {
+        try {
+          const data = matter(await readFile(path.join(directory, file), "utf8")).data;
+          const initial = Number(data.initialAverageScore);
+          const final = Number(data.finalAverageScore);
+          const weak = Number(data.weakPointCount);
+          if (data.kind !== "ai-assessment" || data.courseId !== configured.id || ![initial, final, weak].every(Number.isFinite)) return null;
+          return { courseId: configured.id, file, initial, final, weak };
+        } catch { return null; }
+      }))).filter((item): item is { courseId: string; file: string; initial: number; final: number; weak: number } => item !== null);
+    }))).flat();
+    const latestByCourse = new Map<string, { file: string; weak: number }>();
+    for (const item of assessments) {
+      const previous = latestByCourse.get(item.courseId);
+      if (!previous || item.file > previous.file) latestByCourse.set(item.courseId, { file: item.file, weak: item.weak });
+    }
     return {
       completedTasks, totalTasks, completionRate: totalTasks ? Math.round(completedTasks / totalTasks * 100) : null,
       averageMastery: mastery.length ? Math.round(mastery.reduce((sum, value) => sum + value, 0) / mastery.length * 10) / 10 : null,
       recordCount: courses.reduce((sum, course) => sum + course.records.length, 0),
+      diagnosisCount: assessments.length,
+      evidenceBasedMastery: assessments.length ? Math.round(assessments.reduce((sum, item) => sum + item.final, 0) / assessments.length) / 10 : null,
+      diagnosisBeforeMastery: assessments.length ? Math.round(assessments.reduce((sum, item) => sum + item.initial, 0) / assessments.length) / 10 : null,
+      weakPointCount: [...latestByCourse.values()].reduce((sum, item) => sum + item.weak, 0),
       dueReviewCount: reviews.filter((item) => item.status === "today" || item.status === "overdue").length,
       resourceStatusCounts,
       courses: courses.map((course) => ({ courseId: course.id, title: course.title, accent: course.accent, progress: course.progress, mastery: course.mastery, recordCount: course.records.length })),

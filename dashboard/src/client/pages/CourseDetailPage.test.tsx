@@ -46,5 +46,6 @@ describe("CourseDetailPage", () => {
     expect(screen.getByRole("checkbox", { name: "完成 Lexer" })).not.toBeChecked();
     expect(container.querySelector(".katex")).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "学习记录" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "开始诊断" })).toHaveAttribute("href", "/courses/compiler-principles/coach");
   });
 });

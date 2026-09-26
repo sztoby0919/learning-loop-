@@ -46,4 +46,16 @@ describe("loadDashboardConfig", () => {
 
     await expect(loadDashboardConfig(configPath)).rejects.toThrow("重复课程 ID“duplicate”");
   });
+
+  it("loads confirmed managed courses after a server restart but ignores incomplete directories", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "dashboard-imports-"));
+    const configPath = path.join(root, "dashboard.config.json");
+    const managed = path.join(root, "learning-journal");
+    await mkdir(path.join(managed, "course-ready"), { recursive: true });
+    await mkdir(path.join(managed, "course-incomplete"));
+    await writeFile(path.join(managed, "course-ready", "course.md"), course("course-ready", "已导入课程"));
+    await writeFile(configPath, JSON.stringify({ courses: [] }));
+    const loaded = await loadDashboardConfig(configPath, managed);
+    expect(loaded.courses.map((item) => item.id)).toEqual(["course-ready"]);
+  });
 });

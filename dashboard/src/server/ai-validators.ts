@@ -5,15 +5,15 @@ import { z } from "zod";
 
 // 诊断题目校验
 export const AssessmentQuestionSchema = z.object({
-  id: z.string(),
-  question: z.string(),
-  options: z.array(z.string()),
-  answer: z.string(),
-  explanation: z.string(),
-  knowledgePoint: z.string(),
+  id: z.string().min(1),
+  question: z.string().min(1),
+  options: z.array(z.string().trim().min(1)).length(4).refine((options) => new Set(options).size === 4, "选项不能重复"),
+  answer: z.enum(["A", "B", "C", "D"]),
+  explanation: z.string().min(1),
+  knowledgePoint: z.string().min(1),
 });
 
-export const AssessmentQuestionsSchema = z.array(AssessmentQuestionSchema);
+export const AssessmentQuestionsSchema = z.array(AssessmentQuestionSchema).min(1).max(10);
 
 // 答案反馈校验
 export const AnswerFeedbackSchema = z.object({
@@ -28,16 +28,19 @@ export const AnswerFeedbackSchema = z.object({
 
 // 诊断结果校验
 export const DiagnosisResultSchema = z.object({
-  courseId: z.string(),
+  courseId: z.string().min(1),
   weakPoints: z.array(
     z.object({
-      knowledgePoint: z.string(),
-      evidence: z.string(),
+      knowledgePoint: z.string().min(1),
+      evidence: z.string().min(1),
       severity: z.enum(["high", "medium", "low"]),
     })
   ),
   remediationTasks: z.array(z.string()),
-  nextReviewDate: z.string(),
+  nextReviewDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+    const date = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
+  }, "无效复习日期"),
   proposedChanges: z.object({
     courseMarkdown: z.string(),
     reviewsMarkdown: z.string(),

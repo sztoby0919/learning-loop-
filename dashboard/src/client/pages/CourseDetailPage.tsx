@@ -27,6 +27,8 @@ export function CourseDetailPage({ course }: { course: CourseDetail }) {
         </div>
       </header>
 
+      <Link className="btn btn--primary" to={`/courses/${course.id}/coach`}>开始诊断</Link>
+
       {(course.warning || course.warnings.length > 0) && (
         <div className="inline-warning" role="status">
           <WarningCircle size={20} aria-hidden="true" />

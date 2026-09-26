@@ -19,6 +19,7 @@ const CourseCoachPage = lazy(async () => {
   const module = await import("./pages/CourseCoachPage.js");
   return { default: module.CourseCoachPage };
 });
+const CourseImportPage = lazy(async () => ({ default: (await import("./pages/CourseImportPage.js")).CourseImportPage }));
 
 const CalendarPage = lazy(async () => ({ default: (await import("./pages/CalendarPage.js")).CalendarPage }));
 const CoursesPage = lazy(async () => ({ default: (await import("./pages/CoursesPage.js")).CoursesPage }));
@@ -136,6 +137,7 @@ function NotesRoute() { const { id } = useParams(); const { coursesState, course
 function StatsRoute() { const state = useApiData<LearningStats>(fetchStats); return <AppShell connection={state.connection}><PageState loading={state.loading} error={state.error}>{state.data && <StatsPage stats={state.data} />}</PageState></AppShell>; }
 function SettingsRoute() { const { coursesState } = useCoursesAndPreferences(); const state = useApiData<SettingsData>(fetchSettings); return <AppShell connection={state.connection}><PageState loading={state.loading || coursesState.loading} error={state.error || coursesState.error}>{state.data && coursesState.data && <SettingsPage settings={state.data} courses={coursesState.data.courses} />}</PageState></AppShell>; }
 function CoursesRoute() { const { coursesState, courses } = useCoursesAndPreferences(); const settings = useApiData<SettingsData>(fetchSettings); const merged = courses.map((course) => ({ ...course, artifacts: settings.data?.courses.find((item) => item.id === course.id)?.artifacts })); return <AppShell connection={settings.connection}><PageState loading={settings.loading || coursesState.loading} error={settings.error || coursesState.error}><CoursesPage courses={merged} /></PageState></AppShell>; }
+function CourseImportRoute() { return <AppShell connection="live"><Suspense fallback={<LoadingState />}><CourseImportPage /></Suspense></AppShell>; }
 function CalendarRoute() { const now = new Date(); const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`); const state = useApiData<CalendarEvent[]>((signal) => fetchCalendar(month, signal), month); return <AppShell connection={state.connection}><PageState loading={state.loading} error={state.error}>{state.data && <CalendarPage month={month} events={state.data} onMonthChange={setMonth} />}</PageState></AppShell>; }
 
 export function App() {
@@ -144,6 +146,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<DashboardRoute />} />
         <Route path="/courses" element={<CoursesRoute />} />
+        <Route path="/courses/import" element={<CourseImportRoute />} />
         <Route path="/courses/:id" element={<CourseRoute />} />
         <Route path="/courses/:id/coach" element={<CourseCoachRoute />} />
         <Route path="/tasks" element={<TasksRoute />} />

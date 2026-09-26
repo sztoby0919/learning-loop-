@@ -17,3 +17,5 @@ dashboard.config.json
 .env
 .env.*
 !.env.example
+learning-journal/
+.learning-loop/

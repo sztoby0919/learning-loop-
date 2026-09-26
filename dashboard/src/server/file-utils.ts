@@ -1,8 +1,8 @@
 // 文件操作工具
 // 提供原子写入、哈希检查、冲突检测
 
-import { createHash } from "node:crypto";
-import { readFile, writeFile, rename, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export interface FileOperationResult {
@@ -72,32 +72,49 @@ export async function safeReadFile(filePath: string): Promise<string | null> {
 
 // 批量原子写入（带冲突检测）
 export async function batchAtomicWrite(
-  operations: Array<{ filePath: string; content: string; expectedHash?: string }>,
+  operations: Array<{ filePath: string; content: string; expectedHash?: string | null }>,
 ): Promise<FileOperationResult> {
-  const results: Array<{ filePath: string; hash?: string; success: boolean }> = [];
-
-  for (const op of operations) {
-    // 如果提供了预期哈希，先检查冲突
-    if (op.expectedHash) {
-      const hasConflict = await checkFileConflict(op.filePath, op.expectedHash);
-      if (hasConflict) {
-        return {
-          success: false,
-          conflict: true,
-          error: `文件冲突：${op.filePath} 已被外部修改`,
-        };
+  const staged: Array<{ target: string; temp: string; backup: string; existed: boolean }> = [];
+  const committed: typeof staged = [];
+  const token = randomUUID();
+  try {
+    for (const op of operations) {
+      const existing = await safeReadFile(op.filePath);
+      const currentHash = existing === null ? null : createHash("sha256").update(existing).digest("hex");
+      if (op.expectedHash !== undefined && currentHash !== op.expectedHash) {
+        return { success: false, conflict: true, error: `文件冲突：${op.filePath} 已被外部修改` };
       }
     }
-
-    const result = await atomicWriteFile(op.filePath, op.content);
-    if (!result.success) {
-      return result;
+    for (const op of operations) {
+      await mkdir(path.dirname(op.filePath), { recursive: true });
+      const entry = { target: op.filePath, temp: `${op.filePath}.${token}.tmp`, backup: `${op.filePath}.${token}.bak`, existed: (await safeReadFile(op.filePath)) !== null };
+      await writeFile(entry.temp, op.content, "utf8");
+      staged.push(entry);
     }
-    results.push({ filePath: op.filePath, hash: result.hash, success: true });
+    for (const op of operations) {
+      if (op.expectedHash !== undefined) {
+        const existing = await safeReadFile(op.filePath);
+        const currentHash = existing === null ? null : createHash("sha256").update(existing).digest("hex");
+        if (currentHash !== op.expectedHash) throw new Error(`文件冲突：${op.filePath} 已被外部修改`);
+      }
+    }
+    for (const entry of staged) {
+      if (entry.existed) await copyFile(entry.target, entry.backup);
+      await rename(entry.temp, entry.target);
+      committed.push(entry);
+    }
+    return { success: true, hash: createHash("sha256").update(operations.map((op) => op.content).join("\0")).digest("hex") };
+  } catch (error) {
+    for (const entry of committed.reverse()) {
+      if (entry.existed) await copyFile(entry.backup, entry.target).catch(() => {});
+      else await rm(entry.target, { force: true }).catch(() => {});
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, conflict: message.startsWith("文件冲突："), error: message };
+  } finally {
+    for (const entry of staged) {
+      await rm(entry.temp, { force: true }).catch(() => {});
+      await rm(entry.backup, { force: true }).catch(() => {});
+    }
   }
-
-  return {
-    success: true,
-    hash: results.map((r) => r.hash).join(","),
-  };
 }
