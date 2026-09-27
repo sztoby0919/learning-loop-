@@ -2,8 +2,8 @@ import { WarningCircle } from "@phosphor-icons/react";
 import { lazy, Suspense, useState, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 
-import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, NoteDocument, ResourceItem, ReviewItem, TaskReference } from "../shared/course.js";
-import { fetchCalendar, fetchNotes, fetchResources, fetchReviews, fetchSettings, fetchStats, fetchTasks } from "./api.js";
+import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, NoteDocument, ResourceItem, ReviewItem, ScheduledReview, TaskReference } from "../shared/course.js";
+import { fetchCalendar, fetchDueReviews, fetchNotes, fetchResources, fetchReviews, fetchSettings, fetchStats, fetchTasks } from "./api.js";
 import { AppShell } from "./components/AppShell.js";
 import { useApiData, useCourseDetail, useDashboardData } from "./hooks/useCourseData.js";
 import { usePreferences } from "./preferences.js";
@@ -49,13 +49,14 @@ function ErrorState({ message }: { message: string }) {
 
 function DashboardRoute() {
   const state = useDashboardData();
+  const statsState = useApiData(fetchStats);
   const [preferences] = usePreferences();
   const data = state.data ? filterDashboard(state.data, preferences.hiddenCourseIds, preferences.courseOrder) : null;
   return (
     <AppShell connection={state.connection}>
       {state.loading && <LoadingState />}
       {state.error && <ErrorState message={state.error} />}
-      {data && <DashboardPage data={data} />}
+      {data && <DashboardPage data={data} stats={statsState.data} />}
     </AppShell>
   );
 }
@@ -131,7 +132,7 @@ function PageState({ loading, error, children }: { loading: boolean; error: stri
 }
 
 function TasksRoute() { const { coursesState, courses } = useCoursesAndPreferences(); const state = useApiData<TaskReference[]>(fetchTasks); const ids = new Set(courses.map((course) => course.id)); return <AppShell connection={state.connection}><PageState loading={state.loading || coursesState.loading} error={state.error || coursesState.error}>{state.data && <TasksPage courses={courses} tasks={state.data.filter((item) => ids.has(item.courseId))} />}</PageState></AppShell>; }
-function ReviewRoute() { const { coursesState, courses } = useCoursesAndPreferences(); const state = useApiData<ReviewItem[]>(fetchReviews); const ids = new Set(courses.map((course) => course.id)); return <AppShell connection={state.connection}><PageState loading={state.loading || coursesState.loading} error={state.error || coursesState.error}>{state.data && <ReviewPage courses={courses} reviews={state.data.filter((item) => ids.has(item.courseId))} />}</PageState></AppShell>; }
+function ReviewRoute() { const { coursesState, courses } = useCoursesAndPreferences(); const state = useApiData<ReviewItem[]>(fetchReviews); const due = useApiData<ScheduledReview[]>(fetchDueReviews); const ids = new Set(courses.map((course) => course.id)); return <AppShell connection={state.connection}><PageState loading={state.loading || due.loading || coursesState.loading} error={state.error || due.error || coursesState.error}>{state.data && due.data && <ReviewPage courses={courses} reviews={state.data.filter((item) => ids.has(item.courseId))} scheduledReviews={due.data.filter((item) => ids.has(item.courseId))} />}</PageState></AppShell>; }
 function ResourcesRoute() { const { coursesState, courses } = useCoursesAndPreferences(); const state = useApiData<ResourceItem[]>(fetchResources); const ids = new Set(courses.map((course) => course.id)); return <AppShell connection={state.connection}><PageState loading={state.loading || coursesState.loading} error={state.error || coursesState.error}>{state.data && <ResourcesPage courses={courses} resources={state.data.filter((item) => ids.has(item.courseId))} />}</PageState></AppShell>; }
 function NotesRoute() { const { id } = useParams(); const { coursesState, courses } = useCoursesAndPreferences(); const state = useApiData<NoteDocument[]>(fetchNotes); const ids = new Set(courses.map((course) => course.id)); return <AppShell connection={state.connection}><PageState loading={state.loading || coursesState.loading} error={state.error || coursesState.error}>{state.data && <NotesPage courses={courses} notes={state.data.filter((item) => item.isStandalone || ids.has(item.courseId))} selectedId={id} />}</PageState></AppShell>; }
 function StatsRoute() { const state = useApiData<LearningStats>(fetchStats); return <AppShell connection={state.connection}><PageState loading={state.loading} error={state.error}>{state.data && <StatsPage stats={state.data} />}</PageState></AppShell>; }

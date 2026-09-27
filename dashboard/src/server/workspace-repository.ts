@@ -169,6 +169,12 @@ export class WorkspaceRepository {
     return documents.flatMap((document) => document.items);
   }
 
+  async getDueReviews(): Promise<import("./review-scheduler.js").ScheduledReview[]> {
+    const { getDueReviews } = await import("./review-scheduler.js");
+    const details = await this.details();
+    return getDueReviews(details, 20, this.today(), await this.getReviews());
+  }
+
   async getResources(): Promise<ResourceItem[]> {
     const documents = (await Promise.all(this.config.courses.map((course) => this.getArtifact<ResourceDocument>(course.id, "resources")))).filter((item): item is ResourceDocument => item !== null);
     return documents.flatMap((document) => document.items);
@@ -184,13 +190,18 @@ export class WorkspaceRepository {
     const details = await this.details();
     const meta = new Map(details.map((course) => [course.id, course]));
     const scheduleEvents = (await this.getSchedules()).map((item, index) => ({ id: `schedule:${item.courseId}:${item.date}:${index}`, courseId: item.courseId, courseTitle: meta.get(item.courseId)?.title ?? item.courseId, accent: meta.get(item.courseId)?.accent ?? "#1F5A43", date: item.date, kind: "schedule" as const, title: item.title, status: item.status, detail: [item.type, item.stage, item.note].filter(Boolean).join(" · ") }));
-    const reviewEvents = (await this.getReviews()).flatMap((item, index) => item.nextReview ? [{ id: `review:${item.courseId}:${item.nextReview}:${index}`, courseId: item.courseId, courseTitle: meta.get(item.courseId)?.title ?? item.courseId, accent: meta.get(item.courseId)?.accent ?? "#1F5A43", date: item.nextReview, kind: "review" as const, title: `复习：${item.topic}`, status: item.status, detail: item.evidence }] : []);
+    const reviews = await this.getReviews();
+    const reviewEvents = reviews.flatMap((item, index) => item.nextReview ? [{ id: `review:${item.courseId}:${item.nextReview}:${index}`, courseId: item.courseId, courseTitle: meta.get(item.courseId)?.title ?? item.courseId, accent: meta.get(item.courseId)?.accent ?? "#1F5A43", date: item.nextReview, kind: "review" as const, title: `复习：${item.topic}`, status: item.status, detail: item.evidence }] : []);
+    const { scheduleReviewTimelineForCourse } = await import("./review-scheduler.js");
+    const ebbinghausEvents = details.flatMap((course) => scheduleReviewTimelineForCourse(course, this.today(), new Set(reviews.filter((review) => review.courseId === course.id).map((review) => review.topic)))).filter((r) => r.nextReviewDate.startsWith(month)).map((r, index) => ({ id: `ebbinghaus:${r.courseId}:${r.nextReviewDate}:${index}`, courseId: r.courseId, courseTitle: r.courseTitle, accent: r.accent, date: r.nextReviewDate, kind: "review" as const, title: `复习：${r.topic}`, status: r.daysUntilReview < 0 ? "已过期" : r.daysUntilReview === 0 ? "今天" : `${r.daysUntilReview} 天后`, detail: `第 ${r.reviewNumber + 1} 个计划复习日 · ${r.stage}` }));
     const recordEvents = details.flatMap((course) => course.records.map((record, index) => ({ id: `record:${course.id}:${record.date}:${index}`, courseId: course.id, courseTitle: course.title, accent: course.accent, date: record.date, kind: "record" as const, title: record.content, status: "completed", detail: record.difficulty })));
-    return [...scheduleEvents, ...reviewEvents, ...recordEvents].filter((event) => event.date.startsWith(month)).sort((a, b) => a.date.localeCompare(b.date));
+    return [...scheduleEvents, ...reviewEvents, ...ebbinghausEvents, ...recordEvents].filter((event) => event.date.startsWith(month)).sort((a, b) => a.date.localeCompare(b.date));
   }
 
   async getStats(): Promise<LearningStats> {
     const courses = await this.details();
+    const { calculateLearningActivity } = await import("./learning-activity.js");
+    const activity = calculateLearningActivity(courses.flatMap((course) => course.records.map((record) => record.date)), this.today());
     const reviews = await this.getReviews();
     const resources = await this.getResources();
     const completedTasks = courses.reduce((sum, course) => sum + course.completedTasks, 0);
@@ -217,6 +228,7 @@ export class WorkspaceRepository {
       if (!previous || item.file > previous.file) latestByCourse.set(item.courseId, { file: item.file, weak: item.weak });
     }
     return {
+      ...activity,
       completedTasks, totalTasks, completionRate: totalTasks ? Math.round(completedTasks / totalTasks * 100) : null,
       averageMastery: mastery.length ? Math.round(mastery.reduce((sum, value) => sum + value, 0) / mastery.length * 10) / 10 : null,
       recordCount: courses.reduce((sum, course) => sum + course.records.length, 0),
@@ -224,7 +236,7 @@ export class WorkspaceRepository {
       evidenceBasedMastery: assessments.length ? Math.round(assessments.reduce((sum, item) => sum + item.final, 0) / assessments.length) / 10 : null,
       diagnosisBeforeMastery: assessments.length ? Math.round(assessments.reduce((sum, item) => sum + item.initial, 0) / assessments.length) / 10 : null,
       weakPointCount: [...latestByCourse.values()].reduce((sum, item) => sum + item.weak, 0),
-      dueReviewCount: reviews.filter((item) => item.status === "today" || item.status === "overdue").length,
+      dueReviewCount: (await this.getDueReviews()).filter((item) => item.daysUntilReview <= 0).length,
       resourceStatusCounts,
       courses: courses.map((course) => ({ courseId: course.id, title: course.title, accent: course.accent, progress: course.progress, mastery: course.mastery, recordCount: course.records.length })),
     };
@@ -249,6 +261,51 @@ export class WorkspaceRepository {
     return {
       configPath: this.config.configPath,
       courses: this.config.courses.map((configured) => ({ id: configured.id, root: configured.root, artifacts: (["course", "notes", "reviews", "resources", "schedule", "sessions"] as ArtifactKind[]).map((artifact): CourseArtifactHealth => this.health.get(`${configured.id}:${artifact}`) ?? { artifact, status: "missing", sourcePath: artifactPath(configured.root, artifact), updated: null }) })),
+    };
+  }
+
+  private async exportFiles(root: string): Promise<Record<string, string>> {
+    const files: Record<string, string> = {};
+    for (const artifact of ["course", "notes", "reviews", "resources", "schedule"] as const) {
+      try { files[`${artifact}.md`] = await readFile(artifactPath(root, artifact), "utf8"); }
+      catch (error) { if (!isMissing(error)) throw error; }
+    }
+    const sessions = await readdir(path.join(root, "sessions"), { withFileTypes: true }).catch((error: unknown) => {
+      if (isMissing(error)) return [];
+      throw error;
+    });
+    for (const session of sessions) {
+      if (session.isFile() && session.name.endsWith(".md")) {
+        files[`sessions/${session.name}`] = await readFile(path.join(root, "sessions", session.name), "utf8");
+      }
+    }
+    return files;
+  }
+
+  async exportCourse(courseId: string): Promise<{ version: number; courseId: string; title: string; exportedAt: string; files: Record<string, string>; sourceFormat: string }> {
+    const configured = this.config.courses.find((course) => course.id === courseId);
+    if (!configured) throw new Error("课程不存在");
+    const course = await this.getCourse(courseId as CourseId);
+    return {
+      version: 1,
+      courseId,
+      title: course?.title ?? courseId,
+      exportedAt: new Date().toISOString(),
+      files: await this.exportFiles(configured.root),
+      sourceFormat: "markdown",
+    };
+  }
+
+  async exportAllData(): Promise<{ version: number; exportedAt: string; courseCount: number; courses: Array<{ courseId: string; title: string; files: Record<string, string> }> }> {
+    const exportedCourses = await Promise.all(this.config.courses.map(async (configured) => {
+      const course = await this.getCourse(configured.id);
+      return { courseId: configured.id, title: course?.title ?? configured.id, files: await this.exportFiles(configured.root) };
+    }));
+    return {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      courseCount: exportedCourses.length,
+      courses: exportedCourses,
     };
   }
 }

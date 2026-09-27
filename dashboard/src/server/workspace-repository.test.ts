@@ -69,7 +69,9 @@ describe("WorkspaceRepository", () => {
     expect(notes[0]).toMatchObject({ courseId: "test-course", title: "测试课程", accent: "#27624B" });
     expect(tasks).toHaveLength(2);
     expect(reviews[0]).toMatchObject({ topic: "主题一", status: "today" });
-    expect(calendar.map((event) => event.kind).sort()).toEqual(["record", "review", "schedule"]);
+    expect(calendar.some((event) => event.kind === "record")).toBe(true);
+    expect(calendar.some((event) => event.kind === "review")).toBe(true);
+    expect(calendar.some((event) => event.kind === "schedule")).toBe(true);
     expect(stats).toMatchObject({ completedTasks: 1, totalTasks: 2, recordCount: 1, dueReviewCount: 1 });
     const settings = await repository.getSettings();
     expect(settings.courses[0].artifacts.find((item) => item.artifact === "sessions")).toMatchObject({ status: "ready", count: 1 });
@@ -86,5 +88,44 @@ describe("WorkspaceRepository", () => {
     expect(await repository.getResources()).toHaveLength(1);
     const settings = await repository.getSettings();
     expect(settings.courses[0].artifacts.find((item) => item.artifact === "resources")?.warning).toContain("保留上次成功数据");
+  });
+
+  it("exports course Markdown and session records but excludes source documents", async () => {
+    const { root, courseRoot } = await makeWorkspace();
+    await writeFile(path.join(courseRoot, "source.pdf"), "%PDF-example");
+    const repository = new WorkspaceRepository({ configPath: path.join(root, "dashboard.config.json"), courses: [{ id: "test-course", root: courseRoot, enabled: true }] }, () => "2026-08-29");
+    const single = await repository.exportCourse("test-course");
+    expect(single.files["sessions/2026-08-29.md"]).toBe("# session");
+    expect(single.files["course.md"]).toContain("测试课程");
+    expect(Object.keys(single.files)).not.toContain("source.pdf");
+    expect(single.sourceFormat).not.toBe(path.join(courseRoot, "course.md"));
+    const all = await repository.exportAllData();
+    expect(all.courses[0].files["sessions/2026-08-29.md"]).toBe("# session");
+  });
+
+  it("shows the 30-day planned review on the calendar before it enters the due window", async () => {
+    const { root, courseRoot } = await makeWorkspace();
+    const repository = new WorkspaceRepository({ configPath: path.join(root, "dashboard.config.json"), courses: [{ id: "test-course", root: courseRoot, enabled: true }] }, () => "2026-08-29");
+    const events = await repository.getCalendar("2026-09");
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ date: "2026-09-28", kind: "review", title: "复习：完成练习" })]));
+  });
+
+  it("includes a configured course in backup even when its course.md cannot be parsed", async () => {
+    const { root, courseRoot } = await makeWorkspace();
+    await writeFile(path.join(courseRoot, "course.md"), "broken course content");
+    const repository = new WorkspaceRepository({ configPath: path.join(root, "dashboard.config.json"), courses: [{ id: "test-course", root: courseRoot, enabled: true }] }, () => "2026-08-29");
+    const backup = await repository.exportAllData();
+    expect(backup.courseCount).toBe(1);
+    expect(backup.courses[0].files["course.md"]).toBe("broken course content");
+  });
+
+  it("does not duplicate a handwritten review with a generated calendar reminder", async () => {
+    const { root, courseRoot } = await makeWorkspace();
+    await writeFile(path.join(courseRoot, "reviews.md"), `---\ncourseId: test-course\nupdated: 2026-08-29\n---\n# 复习\n| 知识点 | 上次复习 | 下次复习 | 掌握度 1-10 | 复习证据 |\n| --- | --- | --- | ---: | --- |\n| 完成练习 | 2026-08-29 | 2026-09-05 | 8 | 主动回忆 |`);
+    const repository = new WorkspaceRepository({ configPath: path.join(root, "dashboard.config.json"), courses: [{ id: "test-course", root: courseRoot, enabled: true }] }, () => "2026-08-29");
+    const august = await repository.getCalendar("2026-08");
+    expect(august.filter((event) => event.kind === "review" && event.title === "复习：完成练习")).toHaveLength(0);
+    const september = await repository.getCalendar("2026-09");
+    expect(september.filter((event) => event.kind === "review" && event.title === "复习：完成练习")).toHaveLength(1);
   });
 });

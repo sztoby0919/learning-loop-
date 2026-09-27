@@ -67,7 +67,7 @@ describe("DashboardPage", () => {
   it("渲染三张可访问课程卡、缺失提示和最近记录", () => {
     render(
       <MemoryRouter>
-        <DashboardPage data={data} />
+        <DashboardPage data={data} stats={null} />
       </MemoryRouter>,
     );
 

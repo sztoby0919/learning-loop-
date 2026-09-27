@@ -1,6 +1,6 @@
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
-import type { ExtractedPdf } from "./course-import.js";
+import type { ExtractedDocument } from "./course-import.js";
 
 export class PdfImportError extends Error {
   constructor(readonly code: "INVALID_PDF" | "ENCRYPTED" | "NO_TEXT" | "TOO_MANY_PAGES", message: string) {
@@ -10,18 +10,18 @@ export class PdfImportError extends Error {
 
 const chapterPattern = /^(?:第\s*[一二三四五六七八九十百零〇\d]+\s*[章节篇]|chapter\s+\d+\b|\d+[.、]\s*\S)/i;
 
-export async function extractPdf(bytes: Uint8Array, filename: string): Promise<ExtractedPdf> {
+export async function extractPdf(bytes: Uint8Array, filename: string): Promise<ExtractedDocument> {
   if (bytes.length < 8 || Buffer.from(bytes.subarray(0, 5)).toString("ascii") !== "%PDF-") {
     throw new PdfImportError("INVALID_PDF", "文件不是有效 PDF");
   }
   let loadingTask: ReturnType<typeof getDocument> | undefined;
   try {
-    // PDF.js may transfer/detach its input buffer; keep the caller's bytes for source.pdf.
+    // PDF.js may transfer/detach its input buffer; keep the caller's bytes for the source file.
     loadingTask = getDocument({ data: new Uint8Array(bytes), useSystemFonts: true });
     const document = await loadingTask.promise;
     if (document.numPages > 1000) throw new PdfImportError("TOO_MANY_PAGES", "PDF 超过 1,000 页，请拆分后导入");
-    const pages: ExtractedPdf["pages"] = [];
-    const inferred: ExtractedPdf["outline"] = [];
+    const pages: ExtractedDocument["pages"] = [];
+    const inferred: ExtractedDocument["outline"] = [];
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
       const page = await document.getPage(pageNumber);
       const content = await page.getTextContent();
@@ -35,7 +35,7 @@ export async function extractPdf(bytes: Uint8Array, filename: string): Promise<E
     if (pages.reduce((sum, page) => sum + page.text.length, 0) < 5) {
       throw new PdfImportError("NO_TEXT", "无法从 PDF 提取足够文字；扫描版 PDF 暂不支持，请使用可复制文字的版本");
     }
-    const outline: ExtractedPdf["outline"] = [];
+    const outline: ExtractedDocument["outline"] = [];
     const bookmarks = await document.getOutline();
     for (const item of bookmarks ?? []) {
       if (!item.dest) continue;
@@ -55,6 +55,7 @@ export async function extractPdf(bytes: Uint8Array, filename: string): Promise<E
       pages,
       outline: outline.length ? outline : inferred,
       warnings: pages.some((page) => !page.text) ? ["部分页面没有可提取文字，可能包含图片或扫描内容。"] : [],
+      sourceFormat: "pdf",
     };
   } catch (error) {
     if (error instanceof PdfImportError) throw error;

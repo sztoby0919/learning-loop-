@@ -1,4 +1,4 @@
-import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, NoteDocument, ResourceItem, ReviewItem, TaskReference } from "../shared/course.js";
+import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, NoteDocument, ResourceItem, ReviewItem, ScheduledReview, TaskReference } from "../shared/course.js";
 import type { SettingsData } from "./pages/SettingsPage.js";
 
 async function requestJson<T>(url: string, signal?: AbortSignal): Promise<T> {
@@ -21,6 +21,7 @@ export function fetchCourse(id: CourseId, signal?: AbortSignal): Promise<CourseD
 export const fetchTasks = (signal?: AbortSignal) => requestJson<TaskReference[]>("/api/tasks", signal);
 export const fetchNotes = (signal?: AbortSignal) => requestJson<NoteDocument[]>("/api/notes", signal);
 export const fetchReviews = (signal?: AbortSignal) => requestJson<ReviewItem[]>("/api/reviews", signal);
+export const fetchDueReviews = (signal?: AbortSignal) => requestJson<ScheduledReview[]>("/api/reviews/due", signal);
 export const fetchResources = (signal?: AbortSignal) => requestJson<ResourceItem[]>("/api/resources", signal);
 export const fetchCalendar = (month: string, signal?: AbortSignal) => requestJson<CalendarEvent[]>(`/api/calendar?month=${encodeURIComponent(month)}`, signal);
 export const fetchStats = (signal?: AbortSignal) => requestJson<LearningStats>("/api/stats", signal);
@@ -39,6 +40,7 @@ export interface CourseImportPreview {
     notes: Array<{ title: string; page: number; content: string }>;
     warnings: string[];
     aiStatus: "not-used" | "complete" | "failed";
+    sourceFormat: "pdf" | "docx" | "text";
   };
   files: Record<string, string>;
   aiAvailable: boolean;
@@ -54,10 +56,32 @@ async function importRequest<T>(url: string, init: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function uploadCoursePdf(file: File): Promise<CourseImportPreview> {
-  const body = new FormData();
-  body.append("file", file);
-  return importRequest("/api/course-imports", { method: "POST", body });
+export type UploadProgressCallback = (percent: number) => void;
+
+export function uploadCourseFile(file: File, onProgress?: UploadProgressCallback): Promise<CourseImportPreview> {
+  return new Promise((resolve, reject) => {
+    const body = new FormData();
+    body.append("file", file);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/course-imports");
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText) as CourseImportPreview); }
+        catch { reject(new Error("响应解析失败，请稍后重试")); }
+      } else {
+        let message = `HTTP ${xhr.status}`;
+        try { const payload = JSON.parse(xhr.responseText) as { error?: string }; message = payload?.error ?? message; } catch { /* ignore */ }
+        reject(new Error(message));
+      }
+    };
+    xhr.onerror = () => reject(new Error("网络错误，请检查连接后重试"));
+    xhr.send(body);
+  });
 }
 
 export function updateCourseImport(preview: CourseImportPreview): Promise<CourseImportPreview> {
@@ -71,6 +95,28 @@ export function enrichCourseImport(id: string): Promise<CourseImportPreview> {
 
 export function confirmCourseImport(id: string): Promise<{ courseId: string }> {
   return importRequest(`/api/course-imports/${id}/confirm`, { method: "POST" });
+}
+
+export interface ExportedData {
+  version: number;
+  exportedAt: string;
+  courseCount: number;
+  courses: Array<{ courseId: string; title: string; files: Record<string, string> }>;
+}
+
+export function exportAllData(): Promise<ExportedData> {
+  return requestJson("/api/export");
+}
+
+export async function downloadAllData(): Promise<void> {
+  const data = await exportAllData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `learning-loop-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function cancelCourseImport(id: string): Promise<void> {

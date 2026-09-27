@@ -38,7 +38,6 @@ const imports = new CourseImportManager({
   aiEnricher: aiRuntime.mode === "compatible" ? createCourseImportAi(aiRuntime.config) : undefined,
 });
 await imports.cleanupExpired();
-setInterval(() => void imports.cleanupExpired().catch((error) => console.error("清理过期导入草稿失败:", error)), 60 * 60 * 1000).unref();
 createApp(repository, events, aiService, imports).listen(port, "127.0.0.1", () => {
   console.log(`Study dashboard server: http://127.0.0.1:${port}`);
   console.log(`Dashboard config: ${config.configPath}`);

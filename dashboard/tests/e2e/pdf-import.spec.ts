@@ -22,8 +22,8 @@ function textPdf(): Buffer {
 
 test("PDF upload shows an editable preview and can be cancelled without creating a course", async ({ page }) => {
   await page.goto("/courses");
-  await page.getByRole("link", { name: "从 PDF 创建课程" }).click();
-  await page.getByLabel("选择 PDF 文件").setInputFiles({ name: "limits.pdf", mimeType: "application/pdf", buffer: textPdf() });
+  await page.getByRole("link", { name: "从文档/HTML 创建课程" }).click();
+  await page.getByLabel("选择文件").setInputFiles({ name: "limits.pdf", mimeType: "application/pdf", buffer: textPdf() });
   await expect(page.getByLabel("课程名称")).toHaveValue("limits");
   await expect(page.getByText("公式、表格和图片可能无法从 PDF 文字层准确提取，请对照原文核查。")).toBeVisible();
   await page.getByLabel("课程名称").fill("我的极限课程");

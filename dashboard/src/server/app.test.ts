@@ -72,4 +72,11 @@ describe("course API", () => {
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: "未知课程" });
   });
+
+  it("exports course data and returns 404 for an unknown course", async () => {
+    const app = await setupApp();
+    const response = await request(app).get("/api/courses/compiler-principles/export").expect(200);
+    expect(response.body).toMatchObject({ version: 1, courseId: "compiler-principles", files: { "course.md": expect.stringContaining("编译原理") } });
+    await request(app).get("/api/courses/unknown/export").expect(404);
+  });
 });

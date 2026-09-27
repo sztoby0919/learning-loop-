@@ -1,5 +1,7 @@
-import { ArrowDown, ArrowUp, CheckCircle, WarningCircle } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, CheckCircle, DownloadSimple, Moon, Sun, WarningCircle } from "@phosphor-icons/react";
+import { useState } from "react";
 import type { CourseArtifactHealth, CourseSummary } from "../../shared/course.js";
+import { downloadAllData } from "../api.js";
 import { usePreferences } from "../preferences.js";
 
 export interface SettingsData {
@@ -15,6 +17,15 @@ function healthDescription(item: CourseArtifactHealth) {
 
 export function SettingsPage({ settings, courses }: { settings: SettingsData; courses: CourseSummary[] }) {
   const [preferences, setPreferences] = usePreferences();
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const exportData = async () => {
+    setExporting(true);
+    setExportError(null);
+    try { await downloadAllData(); }
+    catch (error) { setExportError(error instanceof Error ? error.message : "导出失败，请重试"); }
+    finally { setExporting(false); }
+  };
   const ordered = [...courses].sort((a, b) => {
     const ai = preferences.courseOrder.indexOf(a.id);
     const bi = preferences.courseOrder.indexOf(b.id);
@@ -61,6 +72,36 @@ export function SettingsPage({ settings, courses }: { settings: SettingsData; co
             );
           })}
         </div>
+      </section>
+      <section className="workspace-panel">
+        <div className="section-heading"><h2>数据管理</h2></div>
+        <div className="data-management-actions">
+          <button type="button" onClick={() => void exportData()} disabled={exporting}>
+            <DownloadSimple size={18} /> {exporting ? "正在导出…" : exportError ? "重试导出" : "导出全部数据"}
+          </button>
+        </div>
+        {exportError && <p role="alert">导出失败：{exportError}</p>}
+        <small>导出为 JSON，包含课程 Markdown 和学习记录，不包含原始 PDF/Word 等课件。</small>
+      </section>
+      <section className="workspace-panel">
+        <div className="section-heading"><h2>外观设置</h2></div>
+        <div className="theme-toggle">
+          <button
+            type="button"
+            className={preferences.theme === "light" ? "active" : ""}
+            onClick={() => setPreferences({ ...preferences, theme: "light" })}
+          >
+            <Sun size={18} /> 浅色
+          </button>
+          <button
+            type="button"
+            className={preferences.theme === "dark" ? "active" : ""}
+            onClick={() => setPreferences({ ...preferences, theme: "dark" })}
+          >
+            <Moon size={18} /> 深色
+          </button>
+        </div>
+        <small>深色模式适合夜间使用，减少眼部疲劳。</small>
       </section>
       <section className="workspace-panel setup-guide">
         <div className="section-heading"><h2>课程文件规范</h2></div>

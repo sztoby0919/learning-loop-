@@ -8,14 +8,20 @@ import { CourseImportManager } from "./course-import-manager.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+const managers: CourseImportManager[] = [];
+afterEach(async () => {
+  managers.forEach((m) => m.stopScheduledCleanup());
+  managers.length = 0;
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 async function setup() {
   const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-import-"));
   roots.push(root);
   const repository = new WorkspaceRepository({ configPath: path.join(root, "dashboard.config.example.json"), courses: [] }, () => "2026-09-26");
   const watchCourse = vi.fn();
-  const manager = new CourseImportManager({ root, repository, events: new CourseEventBus(), watchCourse, today: () => "2026-09-26", extract: async () => ({ title: "微积分", pageCount: 8, pages: [{ page: 1, text: "第一章 极限 内容" }], outline: [{ title: "第一章 极限", page: 1 }], warnings: [] }) });
+  const manager = new CourseImportManager({ root, repository, events: new CourseEventBus(), watchCourse, today: () => "2026-09-26", extract: async () => ({ title: "微积分", pageCount: 8, pages: [{ page: 1, text: "第一章 极限 内容" }], outline: [{ title: "第一章 极限", page: 1 }], warnings: [], sourceFormat: "pdf" }) });
+  managers.push(manager);
   return { root, repository, manager, watchCourse };
 }
 

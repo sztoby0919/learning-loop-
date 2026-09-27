@@ -1,11 +1,13 @@
-import { ArrowLeft, Check, Circle, WarningCircle } from "@phosphor-icons/react";
+import { ArrowLeft, Check, Circle, Sparkle, WarningCircle } from "@phosphor-icons/react";
 import type { CSSProperties } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import type { CourseDetail } from "../../shared/course.js";
 import { MarkdownContent } from "../components/MarkdownContent.js";
 
 export function CourseDetailPage({ course }: { course: CourseDetail }) {
+  const [searchParams] = useSearchParams();
+  const justImported = searchParams.get("from") === "import";
   const style = { "--course-color": course.accent } as CSSProperties;
 
   return (
@@ -14,6 +16,13 @@ export function CourseDetailPage({ course }: { course: CourseDetail }) {
         <ArrowLeft size={18} aria-hidden="true" />
         返回学习总览
       </Link>
+
+      {justImported && (
+        <div className="import-success-banner" role="status">
+          <Sparkle size={20} aria-hidden="true" />
+          <span>课程创建成功！开始你的学习之旅吧。</span>
+        </div>
+      )}
 
       <header className="course-hero">
         <div>

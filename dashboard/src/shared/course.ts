@@ -97,6 +97,19 @@ export interface ReviewItem {
   status: ReviewStatus;
 }
 
+export interface ScheduledReview {
+  courseId: string;
+  courseTitle: string;
+  accent: string;
+  topic: string;
+  stage: string;
+  recordDate: string;
+  reviewNumber: number;
+  nextReviewDate: string;
+  daysUntilReview: number;
+  mastery: number | null;
+}
+
 export interface ReviewDocument {
   courseId: CourseId;
   updated: string;
@@ -151,6 +164,8 @@ export interface CalendarEvent {
 }
 
 export interface LearningStats {
+  weeklyRecords: Array<{ date: string; count: number }>;
+  streakDays: number;
   completedTasks: number;
   totalTasks: number;
   completionRate: number | null;

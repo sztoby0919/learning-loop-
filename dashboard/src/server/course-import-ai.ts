@@ -44,8 +44,8 @@ export function createCourseImportAi(config: AiConfig, fetcher: typeof fetch = f
         temperature: 0.2,
         max_tokens: Math.max(3000, config.maxTokens),
         messages: [
-          { role: "system", content: "你是课程资料整理助手。只根据用户提供的 PDF 摘录生成章节级课程草稿；不得编造未提供的章节、事实、页码、截止日期或个人学习记录。只返回 JSON 对象，结构为 {stages:[{title,tasks:[string]}],notes:[{title,page,content}]}。任务必须是待完成的学习动作；笔记注明可靠页码。" },
-          { role: "user", content: `课程名：${draft.title}\n学习目标：${draft.goal || "未填写"}\n每周学习时间：${draft.weeklyHours ?? "未填写"}\n以下仅是 PDF 的目录和代表性摘录，并非全文；不要声称覆盖全书。\n${excerpt}` },
+          { role: "system", content: "你是课程资料整理助手。只根据用户提供的文档摘录生成章节级课程草稿；不得编造未提供的章节、事实、页码、截止日期或个人学习记录。只返回 JSON 对象，结构为 {stages:[{title,tasks:[string]}],notes:[{title,page,content}]}。任务必须是待完成的学习动作；笔记注明可靠页码。" },
+          { role: "user", content: `课程名：${draft.title}\n学习目标：${draft.goal || "未填写"}\n每周学习时间：${draft.weeklyHours ?? "未填写"}\n以下仅是文档的目录和代表性摘录，并非全文；不要声称覆盖全书。\n${excerpt}` },
         ],
       }),
       });

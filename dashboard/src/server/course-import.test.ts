@@ -14,6 +14,18 @@ describe("PDF course draft", () => {
     ],
     outline: [{ title: "第一章 极限", page: 1 }, { title: "第二章 导数", page: 6 }],
     warnings: [],
+    sourceFormat: "pdf" as const,
+  };
+
+  const textSource = {
+    title: "算法笔记",
+    pageCount: 3,
+    pages: [
+      { page: 1, text: "# 算法笔记\n## 排序\n排序是基本算法。" },
+    ],
+    outline: [{ title: "排序", page: 1 }],
+    warnings: [],
+    sourceFormat: "text" as const,
   };
 
   it("creates source-grounded stages and parseable files without invented progress or dates", () => {
@@ -51,5 +63,16 @@ describe("PDF course draft", () => {
     const draft = createBasicDraft({ ...source, pages: [...source.pages, { page: 9, text: "作业截止日期：2026-10-01。请提交习题。" }] }, "course.pdf");
     const schedule = parseScheduleMarkdown(buildCourseFiles(draft, "course-dates", "2026-09-26")["schedule.md"], "schedule.md");
     expect(schedule.items).toMatchObject([{ date: "2026-10-01", note: "原 PDF 第 9 页" }]);
+  });
+
+  it("handles text source format with correct labels", () => {
+    const draft = createBasicDraft(textSource, "notes.md");
+    expect(draft.sourceFormat).toBe("text");
+    expect(draft.warnings.some((w) => w.includes("纯文本"))).toBe(true);
+    const files = buildCourseFiles({ ...draft, title: "算法课" }, "course-text", "2026-09-26");
+    expect(files["resources.md"]).toContain("TEXT");
+    expect(files["course.md"]).toContain("文本文件");
+    expect(files["course.md"]).toContain("第 1 段文本");
+    expect(files["course.md"]).not.toContain("第 1 页");
   });
 });

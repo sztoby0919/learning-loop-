@@ -5,13 +5,20 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { CourseEventBus } from "./course-events.js";
-import { buildCourseFiles, createBasicDraft, type ExtractedPdf, type ImportDraft } from "./course-import.js";
+import { buildCourseFiles, createBasicDraft, type ExtractedDocument, type ImportDraft } from "./course-import.js";
+import { DocxImportError, extractDocx } from "./docx-extractor.js";
 import { parseCourseMarkdown } from "./course-parser.js";
+import { extractHtml, HtmlImportError } from "./html-extractor.js";
 import { extractPdf } from "./pdf-extractor.js";
+import { extractText } from "./text-extractor.js";
 import type { WorkspaceRepository } from "./workspace-repository.js";
 
-const MAX_BYTES = 100 * 1024 * 1024;
+const MAX_PDF_BYTES = 100 * 1024 * 1024;
+const MAX_DOCX_BYTES = 50 * 1024 * 1024;
+const MAX_TEXT_BYTES = 10 * 1024 * 1024;
+const MAX_HTML_BYTES = 20 * 1024 * 1024;
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 const updateSchema = z.object({
   title: z.string().trim().min(1).max(100),
@@ -24,12 +31,13 @@ export class CourseImportError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 
-interface PendingDraft { id: string; courseId: string; draft: ImportDraft; source: ExtractedPdf; pdfPath: string; createdAt: number; state: "open" | "committing" | "committed"; }
+interface PendingDraft { id: string; courseId: string; draft: ImportDraft; source: ExtractedDocument; sourcePath: string; createdAt: number; state: "open" | "committing" | "committed"; }
 type AiEnricher = (excerpt: string, draft: ImportDraft) => Promise<Pick<ImportDraft, "stages" | "notes">>;
 
 export class CourseImportManager {
   private readonly pending = new Map<string, PendingDraft>();
   private aiEnricher?: AiEnricher;
+  private cleanupTimer?: ReturnType<typeof setInterval>;
 
   constructor(private readonly options: {
     root: string;
@@ -39,7 +47,19 @@ export class CourseImportManager {
     today: () => string;
     extract?: typeof extractPdf;
     aiEnricher?: AiEnricher;
-  }) { this.aiEnricher = options.aiEnricher; }
+  }) {
+    this.aiEnricher = options.aiEnricher;
+    this.cleanupTimer = setInterval(() => {
+      void this.cleanupExpired().catch(() => { /* best-effort */ });
+    }, CLEANUP_INTERVAL_MS);
+  }
+
+  stopScheduledCleanup(): void {
+    if (this.cleanupTimer !== undefined) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
+  }
 
   setAiEnricher(enricher: AiEnricher): void { this.aiEnricher = enricher; }
 
@@ -58,7 +78,7 @@ export class CourseImportManager {
   async cleanupExpired(): Promise<void> {
     await mkdir(this.tempRoot(), { recursive: true });
     for (const filename of await readdir(this.tempRoot())) {
-      if (!/^[0-9a-f-]{36}\.pdf$/.test(filename)) continue;
+      if (!/^[0-9a-f-]{36}\.(pdf|docx|md|txt|markdown|html|htm)$/.test(filename)) continue;
       const filePath = path.join(this.tempRoot(), filename);
       const details = await stat(filePath).catch(() => null);
       if (details && Date.now() - details.mtimeMs > MAX_AGE_MS) await rm(filePath, { force: true });
@@ -67,15 +87,31 @@ export class CourseImportManager {
   }
 
   async create(bytes: Uint8Array, originalFilename: string) {
-    if (bytes.length > MAX_BYTES) throw new CourseImportError("PDF 超过 100 MB，请压缩或拆分后导入", 413);
-    if (!/\.pdf$/i.test(originalFilename)) throw new CourseImportError("请选择 PDF 文件", 400);
-    const source = await (this.options.extract ?? extractPdf)(bytes, originalFilename);
+    const isPdf = /\.pdf$/i.test(originalFilename);
+    const isDocx = /\.docx$/i.test(originalFilename);
+    const isText = /\.(md|txt|markdown)$/i.test(originalFilename);
+    const isHtml = /\.html?$/i.test(originalFilename);
+    if (!isPdf && !isDocx && !isText && !isHtml) throw new CourseImportError("请选择 PDF、Word (.docx)、Markdown (.md/.txt) 或 HTML 文件", 400);
+    const maxBytes = isPdf ? MAX_PDF_BYTES : isDocx ? MAX_DOCX_BYTES : isHtml ? MAX_HTML_BYTES : MAX_TEXT_BYTES;
+    const maxLabel = isPdf ? "100 MB" : isDocx ? "50 MB" : isHtml ? "20 MB" : "10 MB";
+    if (bytes.length > maxBytes) throw new CourseImportError(`文件超过 ${maxLabel}，请压缩或拆分后导入`, 413);
+    let source: ExtractedDocument;
+    if (isDocx) {
+      source = await extractDocx(bytes, originalFilename);
+    } else if (isHtml) {
+      source = await extractHtml(bytes, originalFilename);
+    } else if (isText) {
+      source = await extractText(bytes, originalFilename);
+    } else {
+      source = await (this.options.extract ?? extractPdf)(bytes, originalFilename);
+    }
     const id = randomUUID();
     const courseId = `course-${id.slice(0, 8)}`;
     await this.cleanupExpired();
-    const pdfPath = path.join(this.tempRoot(), `${id}.pdf`);
-    await writeFile(pdfPath, bytes, { flag: "wx" });
-    this.pending.set(id, { id, courseId, draft: createBasicDraft(source, originalFilename), source, pdfPath, createdAt: Date.now(), state: "open" });
+    const extension = path.extname(originalFilename).toLowerCase();
+    const sourcePath = path.join(this.tempRoot(), `${id}${extension}`);
+    await writeFile(sourcePath, bytes, { flag: "wx" });
+    this.pending.set(id, { id, courseId, draft: createBasicDraft(source, originalFilename), source, sourcePath, createdAt: Date.now(), state: "open" });
     return this.preview(id);
   }
 
@@ -100,7 +136,8 @@ export class CourseImportManager {
 
   async enrich(id: string, consent: boolean) {
     const entry = this.get(id);
-    if (!consent) throw new CourseImportError("请先确认同意将 PDF 摘录发送给模型服务", 400);
+    const sourceLabel = entry.draft.sourceFormat === "docx" ? "Word 文档" : entry.draft.sourceFormat === "text" ? "文本文件" : "PDF";
+    if (!consent) throw new CourseImportError(`请先确认同意将 ${sourceLabel} 摘录发送给模型服务`, 400);
     if (!this.aiEnricher) throw new CourseImportError("未配置真实模型 API，仍可创建基础课程", 503);
     try {
       const result = await this.aiEnricher(this.excerpt(entry), entry.draft);
@@ -134,14 +171,15 @@ export class CourseImportManager {
       await mkdir(staged, { recursive: false });
       for (const [name, content] of Object.entries(files)) await writeFile(path.join(staged, name), content, { flag: "wx" });
       await mkdir(path.join(staged, "sessions"));
-      await writeFile(path.join(staged, "source.pdf"), await readFile(entry.pdfPath), { flag: "wx" });
+      const sourceExt = path.extname(entry.sourcePath);
+      await writeFile(path.join(staged, `source${sourceExt}`), await readFile(entry.sourcePath), { flag: "wx" });
       await rename(staged, courseRoot);
       moved = true;
       await this.options.repository.addCourse({ id: entry.courseId, root: courseRoot, enabled: true });
       registered = true;
       entry.state = "committed";
       try { this.options.watchCourse(courseRoot); } catch { /* The registered course remains usable without the watcher. */ }
-      await rm(entry.pdfPath, { force: true }).catch(() => { /* Expiry cleanup will retry. */ });
+      await rm(entry.sourcePath, { force: true }).catch(() => { /* Expiry cleanup will retry. */ });
       try { this.options.events.publish("journal-updated", { courseId: entry.courseId, artifact: "course" }); } catch { /* Clients can refresh the course list. */ }
       return { courseId: entry.courseId };
     } catch (error) {
@@ -156,13 +194,18 @@ export class CourseImportManager {
   async cancel(id: string): Promise<void> {
     const entry = this.get(id);
     this.pending.delete(id);
-    await rm(entry.pdfPath, { force: true });
+    await rm(entry.sourcePath, { force: true });
   }
 
-  sourcePath(courseId: string): string | null {
+  async sourcePath(courseId: string): Promise<string | null> {
     const configured = this.options.repository.config.courses.find((course) => course.id === courseId);
     const managedRoot = path.resolve(this.courseRoot());
     if (!configured || path.dirname(path.resolve(configured.root)) !== managedRoot) return null;
-    return path.join(configured.root, "source.pdf");
+    const root = configured.root;
+    for (const ext of [".pdf", ".docx", ".md", ".txt", ".markdown", ".html", ".htm"]) {
+      const candidate = path.join(root, `source${ext}`);
+      try { await stat(candidate); return candidate; } catch { /* try next extension */ }
+    }
+    return null;
   }
 }

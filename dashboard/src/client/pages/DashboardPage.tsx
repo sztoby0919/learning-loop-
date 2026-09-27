@@ -1,10 +1,11 @@
 import { CheckSquare, Gauge, WarningCircle } from "@phosphor-icons/react";
 
-import type { CoursesResponse } from "../../shared/course.js";
+import type { CoursesResponse, LearningStats } from "../../shared/course.js";
 import { CourseCard } from "../components/CourseCard.js";
+import { StatsCharts } from "../components/StatsCharts.js";
 import { courseLabel } from "../course-label.js";
 
-export function DashboardPage({ data }: { data: CoursesResponse }) {
+export function DashboardPage({ data, stats }: { data: CoursesResponse; stats: LearningStats | null }) {
   const readyCourses = data.courses.filter((course) => course.status === "ready");
   const completedTasks = data.courses.reduce((sum, course) => sum + course.completedTasks, 0);
   const totalTasks = data.courses.reduce((sum, course) => sum + course.totalTasks, 0);
@@ -81,6 +82,7 @@ export function DashboardPage({ data }: { data: CoursesResponse }) {
           )}
         </section>
       </div>
+      {stats && <StatsCharts stats={stats} courses={data.courses} />}
     </div>
   );
 }

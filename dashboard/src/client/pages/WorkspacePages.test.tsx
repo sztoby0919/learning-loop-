@@ -72,12 +72,13 @@ describe("工作区页面", () => {
   });
 
   it("统计页只显示可计算指标，设置页保存本地隐藏偏好", () => {
-    const stats: LearningStats = { completedTasks: 1, totalTasks: 2, completionRate: 50, averageMastery: 9, recordCount: 1, dueReviewCount: 0, resourceStatusCounts: { 使用中: 1 }, courses: [{ courseId: "compiler", title: "编译原理", accent: "#27624B", progress: 50, mastery: 9, recordCount: 1 }] };
+    const stats: LearningStats = { weeklyRecords: [], streakDays: 0, completedTasks: 1, totalTasks: 2, completionRate: 50, averageMastery: 9, recordCount: 1, dueReviewCount: 0, resourceStatusCounts: { 使用中: 1 }, courses: [{ courseId: "compiler", title: "编译原理", accent: "#27624B", progress: 50, mastery: 9, recordCount: 1 }] };
     const { unmount } = render(<StatsPage stats={stats} />);
     expect(screen.getAllByText("50%").length).toBeGreaterThan(0);
     unmount();
     localStorage.clear();
     render(<SettingsPage settings={{ configPath: "dashboard.config.json", courses: [{ id: "compiler", root: "D:\\course", artifacts: [] }] }} courses={courses} />);
+    expect(screen.queryByText("从备份恢复")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "显示编译原理" }));
     expect(localStorage.getItem("study-dashboard.preferences.v1")).toContain("compiler");
   });

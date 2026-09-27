@@ -13,7 +13,10 @@ import { ArchiveProposalError } from "./archive-proposal.js";
 import { AiResponseFormatError } from "./openai-compatible-provider.js";
 import { CourseImportError, type CourseImportManager } from "./course-import-manager.js";
 import { CourseImportAiError } from "./course-import-ai.js";
+import { DocxImportError } from "./docx-extractor.js";
+import { HtmlImportError } from "./html-extractor.js";
 import { PdfImportError } from "./pdf-extractor.js";
+import { TextImportError } from "./text-extractor.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(currentDirectory, "../../dist");
@@ -54,10 +57,10 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
   });
 
   if (imports) {
-    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1 }, fileFilter: (_request, file, callback) => callback(null, /\.pdf$/i.test(file.originalname)) });
+    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1 }, fileFilter: (_request, file, callback) => callback(null, /\.(pdf|docx|md|txt|markdown|html|htm)$/i.test(file.originalname)) });
     app.post("/api/course-imports", upload.single("file"), async (request, response, next) => {
       try {
-        if (!request.file) throw new CourseImportError("请选择一个 PDF 文件", 400);
+        if (!request.file) throw new CourseImportError("请选择文件", 400);
         response.status(201).json(await imports.create(new Uint8Array(request.file.buffer), decodeUploadFilename(request.file.originalname)));
       } catch (error) { next(error); }
     });
@@ -76,10 +79,13 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     app.delete("/api/course-imports/:id", async (request, response, next) => {
       try { await imports.cancel(request.params.id as string); response.status(204).end(); } catch (error) { next(error); }
     });
-    app.get("/api/courses/:id/source", (request, response, next) => {
-      const filePath = imports.sourcePath(request.params.id as string);
-      if (!filePath) { response.status(404).json({ error: "未找到原始 PDF" }); return; }
-      response.type("pdf").sendFile(filePath, (error) => { if (error && !response.headersSent) next(error); });
+    app.get("/api/courses/:id/source", async (request, response, next) => {
+      const filePath = await imports.sourcePath(request.params.id as string);
+      if (!filePath) { response.status(404).json({ error: "未找到原始文件" }); return; }
+      const contentType = filePath.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : /\.html?$/.test(filePath) ? "text/html; charset=utf-8" : /\.(md|markdown|txt)$/.test(filePath) ? "text/plain; charset=utf-8" : "application/pdf";
+      response.setHeader("X-Content-Type-Options", "nosniff");
+      if (/\.html?$/.test(filePath)) response.setHeader("Content-Security-Policy", "sandbox");
+      response.type(contentType).sendFile(filePath, (error) => { if (error && !response.headersSent) next(error); });
     });
   }
 
@@ -88,6 +94,16 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
       try { response.json(await loader()); } catch (error) { next(error); }
     });
   };
+
+  aggregate("/api/reviews/due", () => repository.getDueReviews());
+  aggregate("/api/export", () => repository.exportAllData());
+  app.get("/api/courses/:id/export", async (request, response, next) => {
+    try {
+      if (!repository.config.courses.some((course) => course.id === request.params.id)) { response.status(404).json({ error: "未知课程" }); return; }
+      const data = await repository.exportCourse(request.params.id as string);
+      response.json(data);
+    } catch (error) { next(error); }
+  });
 
   aggregate("/api/tasks", () => repository.getTasks());
   aggregate("/api/notes", () => repository.getNotes());
@@ -158,7 +174,10 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     if (error instanceof CourseImportError) { response.status(error.status).json({ error: error.message }); return; }
     if (error instanceof CourseImportAiError) { response.status(error.status).json({ error: error.message }); return; }
     if (error instanceof PdfImportError) { response.status(error.code === "TOO_MANY_PAGES" ? 413 : 422).json({ error: error.message }); return; }
-    if (error instanceof multer.MulterError) { response.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ error: error.code === "LIMIT_FILE_SIZE" ? "PDF 超过 100 MB，请压缩或拆分后导入" : "请只上传一个 PDF 文件" }); return; }
+    if (error instanceof DocxImportError) { response.status(error.code === "TOO_MANY_PAGES" ? 413 : 422).json({ error: error.message }); return; }
+    if (error instanceof HtmlImportError) { response.status(422).json({ error: error.message }); return; }
+    if (error instanceof TextImportError) { response.status(422).json({ error: error.message }); return; }
+    if (error instanceof multer.MulterError) { response.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ error: error.code === "LIMIT_FILE_SIZE" ? "文件超过大小限制，请压缩或拆分后导入" : "请只上传一个文件" }); return; }
     if (error instanceof AssessmentError) {
       response.status(error.status).json({ error: error.message });
       return;

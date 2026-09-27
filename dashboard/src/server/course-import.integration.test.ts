@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,18 +12,24 @@ import { createCourseImportAi } from "./course-import-ai.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+const managers: CourseImportManager[] = [];
+afterEach(async () => {
+  managers.forEach((m) => m.stopScheduledCleanup());
+  managers.length = 0;
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 async function setup() {
   const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-api-import-"));
   roots.push(root);
   const events = new CourseEventBus();
   const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, () => "2026-09-26");
-  const manager = new CourseImportManager({ root, repository, events, watchCourse: () => {}, today: () => "2026-09-26", extract: async () => ({ title: "微积分", pageCount: 1, pages: [{ page: 1, text: "第一章 极限与导数" }], outline: [{ title: "第一章 极限", page: 1 }], warnings: [] }) });
+  const manager = new CourseImportManager({ root, repository, events, watchCourse: () => {}, today: () => "2026-09-26", extract: async () => ({ title: "微积分", pageCount: 1, pages: [{ page: 1, text: "第一章 极限与导数" }], outline: [{ title: "第一章 极限", page: 1 }], warnings: [], sourceFormat: "pdf" }) });
+  managers.push(manager);
   return { app: createApp(repository, events, undefined, manager), repository, manager };
 }
 
-describe("PDF import HTTP flow", () => {
+describe("Document import HTTP flow", () => {
   it("uploads, previews, edits, confirms and serves the original PDF", async () => {
     const { app } = await setup();
     const uploaded = await request(app).post("/api/course-imports").attach("file", Buffer.from("%PDF-test"), "course.pdf").expect(201);
@@ -39,10 +45,10 @@ describe("PDF import HTTP flow", () => {
     await request(app).post(`/api/course-imports/${id}/confirm`).expect(409);
   });
 
-  it("rejects missing and non-PDF uploads without creating a course", async () => {
+  it("rejects missing and non-supported uploads without creating a course", async () => {
     const { app } = await setup();
     await request(app).post("/api/course-imports").expect(400);
-    await request(app).post("/api/course-imports").attach("file", Buffer.from("text"), "notes.txt").expect(400);
+    await request(app).post("/api/course-imports").attach("file", Buffer.from("text"), "notes.txt").expect(422);
     expect((await request(app).get("/api/courses")).body.courses).toEqual([]);
   });
 
@@ -63,5 +69,48 @@ describe("PDF import HTTP flow", () => {
     const draft = await request(app).get(`/api/course-imports/${id}`).expect(200);
     expect(draft.body.draft.aiStatus).toBe("failed");
     expect(draft.body.draft.stages).toEqual(uploaded.body.draft.stages);
+  });
+
+  it("rejects an invalid .docx file with a clear error", async () => {
+    const { app } = await setup();
+    // A file with .docx extension but invalid ZIP content
+    const invalidDocx = Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x00, 0x00]);
+    const uploaded = await request(app).post("/api/course-imports").attach("file", invalidDocx, "教学大纲.docx").expect(422);
+    expect(uploaded.body.error).toContain("Word");
+  });
+
+  it("rejects unsupported extensions before parsing", async () => {
+    const { app } = await setup();
+    // Verify multer accepts .docx extension
+    const noFile = await request(app).post("/api/course-imports").attach("file", Buffer.from("not a zip"), "data.csv").expect(400);
+    expect(noFile.body.error).toBe("请选择文件");
+  });
+
+  it("accepts .md file and routes to text extraction path", async () => {
+    const { app } = await setup();
+    const mdContent = Buffer.from("# 课程标题\n## 第一章\n内容");
+    const uploaded = await request(app).post("/api/course-imports").attach("file", mdContent, "notes.md").expect(201);
+    expect(uploaded.body.draft.title).toBe("课程标题");
+    expect(uploaded.body.draft.sourceFormat).toBe("text");
+  });
+
+  it("accepts .html file and routes to html extraction path", async () => {
+    const { app } = await setup();
+    const htmlContent = Buffer.from("<html><body><h1>HTML 课程</h1><p>内容</p></body></html>");
+    const uploaded = await request(app).post("/api/course-imports").attach("file", htmlContent, "page.html").expect(201);
+    expect(uploaded.body.draft.title).toBe("HTML 课程");
+    expect(uploaded.body.draft.sourceFormat).toBe("text");
+  });
+
+  it("keeps the original HTML extension and serves the source as HTML", async () => {
+    const { app, repository } = await setup();
+    const source = "<html><body><h1>网页教程</h1><h2>第一章</h2><p>课程内容</p></body></html>";
+    const uploaded = await request(app).post("/api/course-imports").attach("file", Buffer.from(source), "course.html").expect(201);
+    const result = await request(app).post(`/api/course-imports/${uploaded.body.id}/confirm`).expect(201);
+    const root = repository.config.courses.find((course) => course.id === result.body.courseId)?.root;
+    expect(await readFile(path.join(root!, "source.html"), "utf8")).toBe(source);
+    const opened = await request(app).get(`/api/courses/${result.body.courseId}/source`).expect("Content-Type", /html/).expect(200);
+    expect(opened.headers["content-security-policy"]).toContain("sandbox");
+    expect(opened.headers["x-content-type-options"]).toBe("nosniff");
   });
 });

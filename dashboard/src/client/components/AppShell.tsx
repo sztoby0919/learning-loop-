@@ -1,6 +1,7 @@
-import { ArrowClockwise, BookOpen, Books, CalendarBlank, ChartBar, CheckSquare, Folder, Gear, GridFour, List, Note } from "@phosphor-icons/react";
+import { ArrowClockwise, BookOpen, Books, CalendarBlank, ChartBar, CheckSquare, Folder, Gear, GridFour, List, Moon, Note, Sun } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import { usePreferences } from "../preferences.js";
 
 function Navigation() {
   const items = [
@@ -64,6 +65,32 @@ export function AppShell({ children, connection }: { children: ReactNode; connec
         </header>
         <div className="page-content">{children}</div>
       </main>
+      <ThemeFloatingToggle />
+    </div>
+  );
+}
+
+function ThemeFloatingToggle() {
+  const [preferences, setPreferences] = usePreferences();
+  const isDark = preferences.theme === "dark";
+  return (
+    <div className="theme-floating-toggle">
+      <button
+        type="button"
+        className={!isDark ? "active" : ""}
+        onClick={() => setPreferences({ ...preferences, theme: "light" })}
+        title="浅色模式"
+      >
+        <Sun size={20} />
+      </button>
+      <button
+        type="button"
+        className={isDark ? "active" : ""}
+        onClick={() => setPreferences({ ...preferences, theme: "dark" })}
+        title="深色模式"
+      >
+        <Moon size={20} />
+      </button>
     </div>
   );
 }

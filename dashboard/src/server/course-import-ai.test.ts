@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCourseImportAi } from "./course-import-ai.js";
 import type { ImportDraft } from "./course-import.js";
 
-const draft: ImportDraft = { title: "微积分", originalFilename: "course.pdf", pageCount: 10, goal: "学会极限", weeklyHours: 3, stages: [{ title: "阅读", tasks: ["读第 1 页"] }], notes: [], warnings: [], aiStatus: "not-used" };
+const draft: ImportDraft = { title: "微积分", originalFilename: "course.pdf", pageCount: 10, goal: "学会极限", weeklyHours: 3, stages: [{ title: "阅读", tasks: ["读第 1 页"] }], notes: [], warnings: [], aiStatus: "not-used", sourceFormat: "pdf" };
 const config = { baseUrl: "https://example.com/v1", apiKey: "secret", model: "moma-test", maxTokens: 4000, temperature: 0.7 };
 
 describe("course import AI", () => {
