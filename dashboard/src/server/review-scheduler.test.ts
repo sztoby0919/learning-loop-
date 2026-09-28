@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { scheduleReviewsForCourse, getDueReviews, getStatus } from "./review-scheduler.js";
+import { scheduleReviewsForCourse, getDueReviews, getStatus, nextIntervalDays } from "./review-scheduler.js";
 import type { CourseDetail } from "../shared/course.js";
 
 const mockCourse: CourseDetail = {
@@ -28,6 +28,13 @@ const mockCourse: CourseDetail = {
 };
 
 describe("Review scheduler", () => {
+  it("resets after an incorrect review and advances correct reviews through 3, 7, and 30 days", () => {
+    expect(nextIntervalDays(false, 3)).toBe(1);
+    expect(nextIntervalDays(true, 0)).toBe(3);
+    expect(nextIntervalDays(true, 1)).toBe(7);
+    expect(nextIntervalDays(true, 2)).toBe(30);
+    expect(nextIntervalDays(true, 8)).toBe(30);
+  });
   it("schedules reviews for each record", () => {
     const reviews = scheduleReviewsForCourse(mockCourse);
     expect(reviews.length).toBeGreaterThan(0);
@@ -54,6 +61,11 @@ describe("Review scheduler", () => {
     const due = getDueReviews([mockCourse], 20, "2026-09-26", explicit);
     expect(due.some((review) => review.topic === "学习了导数" && review.nextReviewDate === "2026-09-26")).toBe(false);
     expect(due.filter((review) => review.topic === "学习了导数")).toHaveLength(0);
+  });
+
+  it("does not present a planned date as the date of an uncompleted review", () => {
+    const explicit = [{ courseId: "test-course", topic: "学习了导数", lastReviewed: null, nextReview: "2026-09-27", mastery: null, evidence: "诊断计划", status: "upcoming" as const }];
+    expect(getDueReviews([mockCourse], 20, "2026-09-26", explicit).find((review) => review.topic === "学习了导数")?.recordDate).toBe("");
   });
 
   it("calculates correct status based on days until review", () => {

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 import type { DiagnosisResult } from "./ai-types.js";
+import { parseReviewsMarkdown } from "./artifact-parser.js";
 
 export interface ProposedFile {
   name: string;
@@ -35,13 +36,25 @@ export function buildArchiveProposal(params: {
   if (courseAfter === courseMarkdown && (tasks || mistakes)) throw new ArchiveProposalError("课程档案缺少必要章节，无法生成安全修改");
 
   const baseReviews = params.reviewsMarkdown ?? `---\ncourseId: ${diagnosis.courseId}\nupdated: ${today}\n---\n# 复习计划\n\n| 知识点 | 上次复习 | 下次复习 | 掌握度 1-10 | 复习证据 |\n| --- | --- | --- | ---: | --- |\n`;
-  const rows = diagnosis.weakPoints.slice(0, 5).map((point) => `| ${tableCell(point.knowledgePoint)} | ${today} | ${diagnosis.nextReviewDate} |  | ${tableCell(point.evidence)} |`).join("\n");
+  const rows = diagnosis.weakPoints.slice(0, 5).map((point) => `| ${tableCell(point.knowledgePoint)} |  | ${diagnosis.nextReviewDate} |  | ${tableCell(point.evidence)} |`).join("\n");
   let reviewsAfter = baseReviews;
   if (rows) {
     const lines = baseReviews.split(/\r?\n/);
     const headerIndex = lines.findIndex((line) => /^\|\s*(?:知识点|主题)\s*\|/.test(line));
     if (headerIndex < 0 || !/^\|\s*[-: |]+\|\s*$/.test(lines[headerIndex + 1] ?? "")) {
       throw new ArchiveProposalError("复习计划缺少知识点或主题表格，无法安全插入复习项");
+    }
+    const topics = diagnosis.weakPoints.slice(0, 5).map((point) => point.knowledgePoint.trim());
+    let existingTopics: string[];
+    try {
+      const parsed = parseReviewsMarkdown(baseReviews, "reviews.md", today);
+      if (parsed.warnings.length || parsed.courseId !== diagnosis.courseId) throw new Error("复习计划格式或课程不匹配");
+      existingTopics = parsed.items.map((item) => item.topic);
+    } catch {
+      throw new ArchiveProposalError("复习计划格式无效，无法安全插入复习项");
+    }
+    if (new Set(topics).size !== topics.length || topics.some((topic) => existingTopics.includes(topic))) {
+      throw new ArchiveProposalError("复习计划含重复知识点，无法安全插入复习项");
     }
     let insertAt = headerIndex + 2;
     while (insertAt < lines.length && /^\|.*\|\s*$/.test(lines[insertAt])) insertAt++;

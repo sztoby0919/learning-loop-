@@ -3,6 +3,13 @@ export type { ScheduledReview } from "../shared/course.js";
 
 const REVIEW_INTERVALS_DAYS = [1, 3, 7, 30];
 
+export function nextIntervalDays(isCorrect: boolean, priorConsecutiveCorrectReviews: number): 1 | 3 | 7 | 30 {
+  if (!Number.isInteger(priorConsecutiveCorrectReviews) || priorConsecutiveCorrectReviews < 0) throw new RangeError("连续正确复习次数必须为非负整数");
+  if (!isCorrect) return 1;
+  if (priorConsecutiveCorrectReviews === 0) return 3;
+  return priorConsecutiveCorrectReviews === 1 ? 7 : 30;
+}
+
 export function scheduleReviewTimelineForCourse(course: CourseDetail, today: string = new Date().toISOString().slice(0, 10), explicitTopics: ReadonlySet<string> = new Set()): ScheduledReview[] {
   const todayTime = Date.parse(`${today}T00:00:00Z`);
   return course.records.flatMap((record) => {
@@ -51,7 +58,7 @@ export function getDueReviews(allCourses: CourseDetail[], limit = 20, today: str
     for (const review of explicitForCourse) {
       if (!review.nextReview) continue;
       const daysUntilReview = Math.round((Date.parse(`${review.nextReview}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
-      allReviews.push({ courseId: course.id, courseTitle: course.title, accent: course.accent, topic: review.topic, stage: "复习计划", recordDate: review.lastReviewed ?? review.nextReview, reviewNumber: 0, nextReviewDate: review.nextReview, daysUntilReview, mastery: review.mastery });
+      allReviews.push({ courseId: course.id, courseTitle: course.title, accent: course.accent, topic: review.topic, stage: "复习计划", recordDate: review.lastReviewed ?? "", reviewNumber: 0, nextReviewDate: review.nextReview, daysUntilReview, mastery: review.mastery });
     }
   }
 

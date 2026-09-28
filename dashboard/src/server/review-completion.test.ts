@@ -1,0 +1,59 @@
+import { describe, expect, it } from "vitest";
+
+import { parseReviewsMarkdown } from "./artifact-parser.js";
+import { prepareReviewUpdate, ReviewUpdateConflict } from "./review-completion.js";
+
+const plan = `---
+courseId: calculus-101
+updated: 2026-09-26
+---
+# 复习计划
+
+| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |
+|------|----------|----------|--------|------|
+| 极限定义 | 2026-09-20 | 2026-09-27 | 8 | 手写证明 |
+| 导数概念 |  | 2026-09-27 |  | 诊断发现弱点 |
+
+备注：请保留这段手写说明。
+`;
+
+const params = { courseId: "calculus-101", topic: "导数概念", date: "2026-09-28", isCorrect: false, priorConsecutiveCorrectReviews: 0, evidence: "选择 B，得分 0/100" };
+
+describe("prepareReviewUpdate", () => {
+  it("resets a wrong answer to tomorrow while preserving other manual content and blank mastery", () => {
+    const updated = prepareReviewUpdate(plan, params);
+    expect(updated).toContain("| 极限定义 | 2026-09-20 | 2026-09-27 | 8 | 手写证明 |");
+    expect(updated).toContain("备注：请保留这段手写说明。");
+    expect(updated).toContain("| 导数概念 | 2026-09-28 | 2026-09-29 |  | 选择 B，得分 0/100 |");
+    expect(parseReviewsMarkdown(updated, "reviews.md", "2026-09-28").items[1]).toMatchObject({ lastReviewed: "2026-09-28", nextReview: "2026-09-29", mastery: null });
+  });
+
+  it("advances correct answers from actual consecutive review count", () => {
+    const dates = ["2026-10-01", "2026-10-05", "2026-10-28", "2026-10-28"];
+    for (const [priorConsecutiveCorrectReviews, nextDate] of dates.entries()) {
+      const updated = prepareReviewUpdate(plan, { ...params, isCorrect: true, priorConsecutiveCorrectReviews, evidence: "选择 A，得分 100/100" });
+      expect(parseReviewsMarkdown(updated, "reviews.md", "2026-09-28").items[1]).toMatchObject({ nextReview: nextDate, mastery: null, evidence: "选择 A，得分 100/100" });
+    }
+  });
+
+  it("creates a parseable table when reviews.md is missing", () => {
+    const updated = prepareReviewUpdate(null, params);
+    expect(parseReviewsMarkdown(updated, "reviews.md", "2026-09-28")).toMatchObject({ courseId: "calculus-101", items: [{ topic: "导数概念", nextReview: "2026-09-29", mastery: null }] });
+  });
+
+  it("rejects duplicate topic rows without choosing one", () => {
+    const duplicate = plan.replace("\n\n备注：", "\n| 导数概念 | | 2026-10-01 | 3 | 手写复习 |\n\n备注：");
+    expect(() => prepareReviewUpdate(duplicate, params)).toThrow(ReviewUpdateConflict);
+  });
+
+  it("rejects malformed topic rows and malformed tables", () => {
+    const shortRow = plan.replace("| 导数概念 |  | 2026-09-27 |  | 诊断发现弱点 |", "| 导数概念 | 2026-09-27 | 缺列 |");
+    expect(() => prepareReviewUpdate(shortRow, params)).toThrow(ReviewUpdateConflict);
+    expect(() => prepareReviewUpdate(plan.replace("|------|----------|----------|--------|------|", "不是分隔行"), params)).toThrow(ReviewUpdateConflict);
+    expect(() => prepareReviewUpdate("# 手写复习计划\n", params)).toThrow(ReviewUpdateConflict);
+  });
+
+  it("rejects a review plan for another course", () => {
+    expect(() => prepareReviewUpdate(plan.replace("courseId: calculus-101", "courseId: another-course"), params)).toThrow(ReviewUpdateConflict);
+  });
+});

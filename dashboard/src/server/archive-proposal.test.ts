@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseReviewsMarkdown } from "./artifact-parser.js";
-import { buildArchiveProposal } from "./archive-proposal.js";
+import { ArchiveProposalError, buildArchiveProposal } from "./archive-proposal.js";
 
 describe("buildArchiveProposal", () => {
   it("records a single-choice attempt without retry wording", () => {
@@ -21,6 +21,7 @@ describe("buildArchiveProposal", () => {
     const reviewsMarkdown = `---\ncourseId: calculus-101\nupdated: 2026-09-26\n---\n| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |\n|------|----------|----------|--------|------|\n| 极限定义 | 2026-09-25 | 2026-09-27 | 8 | 练习正确 |\n`;
     const files = buildArchiveProposal({ courseRoot: "C:/tmp/calculus-101", assessmentId: "test", courseMarkdown, reviewsMarkdown, diagnosis: { courseId: "calculus-101", weakPoints: [{ knowledgePoint: "导数", evidence: "未说明瞬时", severity: "medium" }], remediationTasks: ["复习导数"], nextReviewDate: "2026-09-29", proposedChanges: { courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" } }, answers: [], today: "2026-09-26" });
     expect(parseReviewsMarkdown(files[1].after, "reviews.md", "2026-09-26").items.map((item) => item.topic)).toEqual(["极限定义", "导数"]);
+    expect(parseReviewsMarkdown(files[1].after, "reviews.md", "2026-09-26").items[1]).toMatchObject({ lastReviewed: null, nextReview: "2026-09-29", mastery: null });
     expect(files[1].after).toContain("| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |");
   });
   it("inserts review rows inside the table when notes follow it", () => {
@@ -29,5 +30,11 @@ describe("buildArchiveProposal", () => {
     const files = buildArchiveProposal({ courseRoot: "C:/tmp/c", assessmentId: "test", courseMarkdown, reviewsMarkdown, diagnosis: { courseId: "c", weakPoints: [{ knowledgePoint: "新知识", evidence: "回答错误", severity: "high" }], remediationTasks: ["重做题"], nextReviewDate: "2026-09-28", proposedChanges: { courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" } }, answers: [], today: "2026-09-25" });
     expect(parseReviewsMarkdown(files[1].after, "reviews.md", "2026-09-25").items.map((item) => item.topic)).toEqual(["旧知识", "新知识"]);
     expect(files[1].after).toContain("备注：保留这段说明。");
+  });
+
+  it("rejects a diagnosis topic already present in the manual plan", () => {
+    const courseMarkdown = "## 关键知识\n导数\n## 学习记录\n";
+    const reviewsMarkdown = "---\ncourseId: c\nupdated: 2026-09-25\n---\n| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |\n| --- | --- | --- | --- | --- |\n| 导数 | 2026-09-24 | 2026-09-27 | 8 | 手工复述 |\n";
+    expect(() => buildArchiveProposal({ courseRoot: "C:/tmp/c", assessmentId: "test", courseMarkdown, reviewsMarkdown, diagnosis: { courseId: "c", weakPoints: [{ knowledgePoint: "导数", evidence: "本次作答错误", severity: "high" }], remediationTasks: [], nextReviewDate: "2026-09-28", proposedChanges: { courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" } }, answers: [], today: "2026-09-25" })).toThrow(ArchiveProposalError);
   });
 });
