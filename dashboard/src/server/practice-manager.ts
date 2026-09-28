@@ -16,6 +16,25 @@ type Choice = "A" | "B" | "C" | "D";
 const SESSION_LIFETIME_MS = 30 * 60 * 1000;
 const publicQuestion = ({ id, question, options, knowledgePoint }: AssessmentQuestion): PublicAssessmentQuestion => ({ id, question, options, knowledgePoint });
 const normalizeQuestion = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}\s]/gu, "");
+const normalizeOption = (value: string) => value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+// Only explicit answer declarations paired with a standalone A-D choice count as hints.
+// Wording such as “正确答案是什么” or “分析选项 B 是否正确” remains a valid question.
+const answerCuePatterns = [
+  /(?:正确|参考|标准)答案\s*(?:是|为)?\s*[:=]?\s*(?:选项)?[A-D](?![\p{L}\p{N}])/iu,
+  /答案\s*(?:是|为|[:=])\s*[:=]?\s*(?:选项)?[A-D](?![\p{L}\p{N}])/iu,
+  /(?:应|该|请)\s*选\s*[A-D](?![\p{L}\p{N}])/iu,
+  /[A-D]\s*(?:选项|项)\s*(?:是|为)?\s*正确(?:答案)?/iu,
+  /\b(?:correct answer|answer key)\s*(?::|=|is)?\s*[A-D]\b/iu,
+  /\banswer\s*(?::|=|is)\s*[A-D]\b/iu,
+];
+const hasAnswerCue = (question: AssessmentQuestion) => {
+  const publicText = [question.question, ...question.options, question.knowledgePoint];
+  const declaredChoice = publicText.some((text) => answerCuePatterns.some((pattern) =>
+    pattern.test(text.normalize("NFKC").replace(/[()\[\]【】]/gu, " "))));
+  const markedOption = question.options.some((option) =>
+    /(?:\(|\[|【)\s*(?:正确答案|正确|correct)\s*(?:\)|\]|】)\s*$/iu.test(option.normalize("NFKC")));
+  return declaredChoice || markedOption;
+};
 
 interface PracticeSession {
   id: string;
@@ -72,8 +91,13 @@ export class PracticeManager {
     if (
       !validateAssessmentQuestions(generated).success
       || generated.length !== 1
+      || !generated[0].question.trim()
+      || !generated[0].explanation.trim()
+      || !generated[0].knowledgePoint.trim()
+      || new Set(generated[0].options.map(normalizeOption)).size !== 4
       || normalizeQuestion(generated[0].question) === normalizeQuestion(mistake.question)
       || (mistake.knowledgePoint && normalizeQuestion(generated[0].knowledgePoint) !== normalizeQuestion(mistake.knowledgePoint))
+      || hasAnswerCue(generated[0])
     ) {
       throw new AssessmentError("模型生成的练习题无效或与原题相同，请重试", 502);
     }

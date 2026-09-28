@@ -45,7 +45,7 @@ const provider: AiProvider = {
   async generateRemediationTasks() { return []; },
 };
 
-async function setup(aiProvider: AiProvider = provider, mode: "real" | "mock" = "real", now = () => 0) {
+async function setup(aiProvider: AiProvider = provider, mode: "real" | "mock" = "real", now = () => 0, sourceKnowledgePoint = "导数") {
   const root = await mkdtemp(path.join(tmpdir(), "learning-loop-practice-unit-"));
   const courseRoot = path.join(root, "calculus-101");
   await mkdir(path.join(courseRoot, "sessions"), { recursive: true });
@@ -53,7 +53,7 @@ async function setup(aiProvider: AiProvider = provider, mode: "real" | "mock" = 
   await writeFile(path.join(courseRoot, "reviews.md"), "手工复习计划\n");
   await writeFile(path.join(courseRoot, "sessions", "old.md"), renderAttemptSession({
     kind: "targeted-practice", courseId: "calculus-101", confirmedAt: "2026-09-27", mode: "real",
-    question: { question: "导数表示什么？", options: ["平均变化率", "瞬时变化率", "函数值", "积分面积"], selected: "A", correct: "B", explanation: "导数是瞬时变化率。", knowledgePoint: "导数" },
+    question: { question: "导数表示什么？", options: ["平均变化率", "瞬时变化率", "函数值", "积分面积"], selected: "A", correct: "B", explanation: "导数是瞬时变化率。", knowledgePoint: sourceKnowledgePoint },
   }));
   const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [{ id: "calculus-101", root: courseRoot, enabled: true }] }, () => "2026-09-28");
   const mistakeId = (await readMistakes(courseRoot, "calculus-101")).items[0].id;
@@ -84,6 +84,54 @@ describe("PracticeManager targeted practice", () => {
 
   it("rejects a generated question about a different knowledge point", async () => {
     const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [{ ...generated, knowledgePoint: "积分" }]; } });
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
+  });
+
+  it.each(["question", "explanation", "knowledgePoint"] as const)("rejects whitespace-only %s before a retry can be answered and confirmed", async (field) => {
+    let calls = 0;
+    const valid = { ...generated, question: `  ${generated.question}  `, explanation: `  ${generated.explanation}  `, knowledgePoint: " 导数 " };
+    const { manager, mistakeId, courseRoot } = await setup({ ...provider, async generateQuestions() {
+      return [calls++ === 0 ? { ...valid, [field]: " \n\t " } : valid];
+    } });
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
+    const created = await manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" });
+    await manager.answer(created.sessionId, "fresh-q", "A");
+    await expect(manager.confirm(created.sessionId)).resolves.toMatchObject({ courseId: "calculus-101" });
+    const fresh = (await readdir(path.join(courseRoot, "sessions"))).find((name) => name !== "old.md");
+    expect(await readFile(path.join(courseRoot, "sessions", fresh!), "utf8")).toContain("解析：切线斜率表示该点的瞬时变化率。");
+  });
+
+  it.each(["question", "options", "knowledgePoint"] as const)("rejects an explicit answer cue in public %s", async (field) => {
+    const cue = "正确答案：B";
+    const contaminated = {
+      ...generated,
+      question: field === "question" ? `${generated.question}${cue}` : generated.question,
+      options: field === "options" ? ["平均变化率", `瞬时变化率（${cue}）`, "函数值", "积分面积"] : generated.options,
+      knowledgePoint: field === "knowledgePoint" ? `导数（${cue}）` : generated.knowledgePoint,
+    };
+    const sourceKnowledgePoint = field === "knowledgePoint" ? contaminated.knowledgePoint : "导数";
+    const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [contaminated]; } }, "real", () => 0, sourceKnowledgePoint);
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
+  });
+
+  it.each(["答案是 B", "答案为：B", "应选 B", "B 选项正确", "Answer: B", "Correct answer B", "【正确答案】B"])("rejects the answer declaration %s in the public question", async (cue) => {
+    const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [{ ...generated, question: `${generated.question} ${cue}` }]; } });
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("rejects a correct marker attached to a public option without a choice letter", async () => {
+    const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [{ ...generated, options: ["平均变化率", "瞬时变化率（正确）", "函数值", "积分面积"] }]; } });
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("allows ordinary question wording and option text that do not disclose a choice", async () => {
+    const normal = { ...generated, question: "分析选项 B 是否正确：这道题的正确答案是什么？", options: ["答案是一个过程", "B 族维生素", "函数值", "积分面积"] };
+    const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [normal]; } });
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).resolves.toMatchObject({ question: { question: normal.question, options: normal.options } });
+  });
+
+  it("rejects choices that become identical after Unicode normalization", async () => {
+    const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [{ ...generated, options: ["Ａ", "A", "函数值", "积分面积"] }]; } });
     await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
   });
 
