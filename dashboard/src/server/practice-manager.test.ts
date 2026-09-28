@@ -119,9 +119,14 @@ describe("PracticeManager targeted practice", () => {
     await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
   });
 
-  it.each(["正确选项：B", "正确 选项 ： B", "正确选项是 B", "正确的选项为 B", "正确答案为选项 B", "正确答案为：选项 B"])("rejects the explicit choice hint %s", async (cue) => {
+  it.each(["正确选项：B", "正确 选项 ： B", "正确选项是 B。", "正确的选项为 B", "正确答案为选项 B", "正确答案为：选项 B"])("rejects the explicit choice hint %s", async (cue) => {
     const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [{ ...generated, question: `${generated.question} ${cue}` }]; } });
     await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
+  });
+
+  it.each(["正确选项是 B 还是 C？", "正确选项是 B 吗？", "正确选项是 B？", "正确答案是 B 还是 C？", "B 选项正确吗？", "应选 B 吗？"])("allows the unanswered choice question %s", async (wording) => {
+    const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [{ ...generated, question: wording }]; } });
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).resolves.toMatchObject({ question: { question: wording } });
   });
 
   it.each(["options", "knowledgePoint"] as const)("rejects a correct-option hint in public %s", async (field) => {

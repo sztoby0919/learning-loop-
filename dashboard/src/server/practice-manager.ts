@@ -18,19 +18,24 @@ const publicQuestion = ({ id, question, options, knowledgePoint }: AssessmentQue
 const normalizeQuestion = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}\s]/gu, "");
 const normalizeOption = (value: string) => value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
 // Only explicit answer declarations paired with a standalone A-D choice count as hints.
-// Wording such as “正确答案是什么” or “分析选项 B 是否正确” remains a valid question.
 const answerCuePatterns = [
-  /(?:正确\s*(?:的\s*)?(?:答案|选项)|(?:参考|标准)\s*答案)\s*(?:是|为)?\s*[:=]?\s*(?:选项\s*)?[A-D](?![\p{L}\p{N}])/iu,
-  /答案\s*(?:是|为|[:=])\s*[:=]?\s*(?:选项\s*)?[A-D](?![\p{L}\p{N}])/iu,
-  /(?:应|该|请)\s*选\s*[A-D](?![\p{L}\p{N}])/iu,
-  /[A-D]\s*(?:选项|项)\s*(?:是|为)?\s*正确(?:答案)?/iu,
-  /\b(?:correct answer|answer key)\s*(?::|=|is)?\s*[A-D]\b/iu,
-  /\banswer\s*(?::|=|is)\s*[A-D]\b/iu,
+  /(?:正确\s*(?:的\s*)?(?:答案|选项)|(?:参考|标准)\s*答案)\s*(?:是|为)?\s*[:=]?\s*(?:选项\s*)?[A-D](?![\p{L}\p{N}])/giu,
+  /答案\s*(?:是|为|[:=])\s*[:=]?\s*(?:选项\s*)?[A-D](?![\p{L}\p{N}])/giu,
+  /(?:应|该|请)\s*选\s*[A-D](?![\p{L}\p{N}])/giu,
+  /[A-D]\s*(?:选项|项)\s*(?:是|为)?\s*正确(?:答案)?/giu,
+  /\b(?:correct answer|answer key)\s*(?::|=|is)?\s*[A-D]\b/giu,
+  /\banswer\s*(?::|=|is)\s*[A-D]\b/giu,
 ];
+// A choice followed immediately by a question particle, question mark, or a
+// second alternative ending in a question mark is being asked about, not given.
+const unansweredChoiceSuffix = /^\s*(?:(?:还是|或(?:者)?)\s*[A-D]\s*[?？]|(?:吗|么|呢)\s*[?？]?|[?？])/iu;
 const hasAnswerCue = (question: AssessmentQuestion) => {
   const publicText = [question.question, ...question.options, question.knowledgePoint];
-  const declaredChoice = publicText.some((text) => answerCuePatterns.some((pattern) =>
-    pattern.test(text.normalize("NFKC").replace(/[()\[\]【】]/gu, " "))));
+  const declaredChoice = publicText.some((text) => {
+    const normalized = text.normalize("NFKC").replace(/[()\[\]【】]/gu, " ");
+    return answerCuePatterns.some((pattern) => [...normalized.matchAll(pattern)].some((match) =>
+      !unansweredChoiceSuffix.test(normalized.slice((match.index ?? 0) + match[0].length))));
+  });
   const markedOption = question.options.some((option) =>
     /(?:\(|\[|【)\s*(?:正确答案|正确|correct)\s*(?:\)|\]|】)\s*$/iu.test(option.normalize("NFKC")));
   return declaredChoice || markedOption;
