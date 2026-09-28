@@ -20,8 +20,8 @@ const normalizeOption = (value: string) => value.normalize("NFKC").trim().replac
 // Only explicit answer declarations paired with a standalone A-D choice count as hints.
 // Wording such as “正确答案是什么” or “分析选项 B 是否正确” remains a valid question.
 const answerCuePatterns = [
-  /(?:正确|参考|标准)答案\s*(?:是|为)?\s*[:=]?\s*(?:选项)?[A-D](?![\p{L}\p{N}])/iu,
-  /答案\s*(?:是|为|[:=])\s*[:=]?\s*(?:选项)?[A-D](?![\p{L}\p{N}])/iu,
+  /(?:正确\s*(?:的\s*)?(?:答案|选项)|(?:参考|标准)\s*答案)\s*(?:是|为)?\s*[:=]?\s*(?:选项\s*)?[A-D](?![\p{L}\p{N}])/iu,
+  /答案\s*(?:是|为|[:=])\s*[:=]?\s*(?:选项\s*)?[A-D](?![\p{L}\p{N}])/iu,
   /(?:应|该|请)\s*选\s*[A-D](?![\p{L}\p{N}])/iu,
   /[A-D]\s*(?:选项|项)\s*(?:是|为)?\s*正确(?:答案)?/iu,
   /\b(?:correct answer|answer key)\s*(?::|=|is)?\s*[A-D]\b/iu,

@@ -119,13 +119,28 @@ describe("PracticeManager targeted practice", () => {
     await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
   });
 
+  it.each(["正确选项：B", "正确 选项 ： B", "正确选项是 B", "正确的选项为 B", "正确答案为选项 B", "正确答案为：选项 B"])("rejects the explicit choice hint %s", async (cue) => {
+    const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [{ ...generated, question: `${generated.question} ${cue}` }]; } });
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
+  });
+
+  it.each(["options", "knowledgePoint"] as const)("rejects a correct-option hint in public %s", async (field) => {
+    const cue = "正确选项：B";
+    const contaminated = field === "options"
+      ? { ...generated, options: ["平均变化率", `瞬时变化率（${cue}）`, "函数值", "积分面积"] }
+      : { ...generated, knowledgePoint: `导数（${cue}）` };
+    const sourceKnowledgePoint = field === "knowledgePoint" ? contaminated.knowledgePoint : "导数";
+    const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [contaminated]; } }, "real", () => 0, sourceKnowledgePoint);
+    await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
+  });
+
   it("rejects a correct marker attached to a public option without a choice letter", async () => {
     const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [{ ...generated, options: ["平均变化率", "瞬时变化率（正确）", "函数值", "积分面积"] }]; } });
     await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).rejects.toMatchObject({ status: 502 });
   });
 
   it("allows ordinary question wording and option text that do not disclose a choice", async () => {
-    const normal = { ...generated, question: "分析选项 B 是否正确：这道题的正确答案是什么？", options: ["答案是一个过程", "B 族维生素", "函数值", "积分面积"] };
+    const normal = { ...generated, question: "分析选项 B 是否正确：正确的选项是哪个？", options: ["答案是一个过程", "B 族维生素", "函数值", "积分面积"] };
     const { manager, mistakeId } = await setup({ ...provider, async generateQuestions() { return [normal]; } });
     await expect(manager.create({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" })).resolves.toMatchObject({ question: { question: normal.question, options: normal.options } });
   });
