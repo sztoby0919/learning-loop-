@@ -1,4 +1,4 @@
-import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, NoteDocument, PracticeChoice, PracticeSessionConfirmed, PracticeSessionCreated, ResourceItem, ReviewItem, ScheduledReview, TaskReference } from "../shared/course.js";
+import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, MistakeItem, NoteDocument, PracticeChoice, PracticeSessionConfirmed, PracticeSessionCreated, ResourceItem, ReviewItem, ScheduledReview, TaskReference } from "../shared/course.js";
 import type { AnswerFeedback } from "../server/ai-types.js";
 import type { SettingsData } from "./pages/SettingsPage.js";
 
@@ -27,6 +27,10 @@ export const fetchResources = (signal?: AbortSignal) => requestJson<ResourceItem
 export const fetchCalendar = (month: string, signal?: AbortSignal) => requestJson<CalendarEvent[]>(`/api/calendar?month=${encodeURIComponent(month)}`, signal);
 export const fetchStats = (signal?: AbortSignal) => requestJson<LearningStats>("/api/stats", signal);
 export const fetchSettings = (signal?: AbortSignal) => requestJson<SettingsData>("/api/settings", signal);
+
+export function fetchMistakes(id: CourseId, signal?: AbortSignal): Promise<{ items: MistakeItem[]; warnings: string[] }> {
+  return requestJson(`/api/courses/${id}/mistakes`, signal);
+}
 
 export function createPracticeSession(courseId: CourseId, mistakeId: string): Promise<PracticeSessionCreated> {
   return importRequest("/api/practice-sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courseId, mistakeId, kind: "targeted-practice" }) });

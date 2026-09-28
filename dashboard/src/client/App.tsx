@@ -20,6 +20,7 @@ const CourseCoachPage = lazy(async () => {
   return { default: module.CourseCoachPage };
 });
 const CourseImportPage = lazy(async () => ({ default: (await import("./pages/CourseImportPage.js")).CourseImportPage }));
+const MistakesPage = lazy(async () => ({ default: (await import("./pages/MistakesPage.js")).MistakesPage }));
 
 const CalendarPage = lazy(async () => ({ default: (await import("./pages/CalendarPage.js")).CalendarPage }));
 const CoursesPage = lazy(async () => ({ default: (await import("./pages/CoursesPage.js")).CoursesPage }));
@@ -71,6 +72,12 @@ function CourseCoachRoute() {
   const id = useParams().id as CourseId;
   if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return <Navigate to="/" replace />;
   return <KnownCourseCoachRoute id={id} />;
+}
+
+function CourseMistakesRoute() {
+  const id = useParams().id as CourseId;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return <Navigate to="/" replace />;
+  return <MistakesPage courseId={id} />;
 }
 
 function KnownCourseRoute({ id }: { id: CourseId }) {
@@ -150,6 +157,7 @@ export function App() {
         <Route path="/courses/import" element={<CourseImportRoute />} />
         <Route path="/courses/:id" element={<CourseRoute />} />
         <Route path="/courses/:id/coach" element={<CourseCoachRoute />} />
+        <Route path="/courses/:id/mistakes" element={<Suspense fallback={<LoadingState />}><CourseMistakesRoute /></Suspense>} />
         <Route path="/tasks" element={<TasksRoute />} />
         <Route path="/notes" element={<NotesRoute />} />
         <Route path="/notes/:id" element={<NotesRoute />} />

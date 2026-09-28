@@ -37,6 +37,7 @@ export function CourseDetailPage({ course }: { course: CourseDetail }) {
       </header>
 
       <Link className="btn btn--primary" to={`/courses/${course.id}/coach`}>开始诊断</Link>
+      <Link className="btn" to={`/courses/${course.id}/mistakes`}>查看错题本</Link>
 
       {(course.warning || course.warnings.length > 0) && (
         <div className="inline-warning" role="status">

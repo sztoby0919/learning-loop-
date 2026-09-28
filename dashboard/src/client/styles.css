@@ -1426,6 +1426,22 @@ input:focus-visible {
 .coach-choice span { flex: 1; }
 
 .coach-feedback .btn + .btn { margin-left: 12px; }
+.course-detail > .btn + .btn { margin-left: 10px; }
+.mistakes-page { max-width: 920px; margin: 0 auto; }
+.mistakes-page .page-header { margin-bottom: 24px; }
+.mistakes-page .page-header p { color: var(--text-secondary); }
+.mistakes-list { display: grid; gap: 18px; margin: 0; padding: 0; list-style: none; }
+.mistake-card { border: 1px solid var(--line); border-radius: 8px; padding: 24px; background: var(--surface); }
+.mistake-card__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; color: var(--text-secondary); font-size: 13px; }
+.mistake-card h2 { margin: 14px 0; font-family: var(--serif); font-size: 21px; }
+.mistake-card p { line-height: 1.6; }
+.practice-flow { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.practice-flow h3 { margin: 12px 0 0; font-size: 19px; }
+.practice-topic { color: var(--text-secondary); }
+.practice-mode { display: inline-block; border: 1px solid var(--warning); border-radius: 4px; padding: 3px 8px; color: var(--warning); font-size: 12px; font-weight: 700; }
+.practice-saved { color: var(--accent); font-weight: 600; }
+.practice-feedback { margin-top: 18px; }
+.practice-feedback .btn { margin-top: 8px; }
 .file-change + .file-change { margin-top: 16px; }
 .file-change h5 { margin: 0 0 10px; font-size: 14px; }
 .file-change__comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
