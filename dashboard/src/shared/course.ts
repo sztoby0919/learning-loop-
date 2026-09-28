@@ -1,5 +1,18 @@
 export type CourseId = string;
 
+export interface MistakeItem {
+  id: string;
+  courseId: CourseId;
+  question: string;
+  selected: string;
+  correct: string;
+  explanation: string;
+  knowledgePoint: string | null;
+  date: string;
+  sourceSession: string;
+  mode: "real" | "mock" | "unknown";
+}
+
 export type ArtifactKind = "course" | "notes" | "reviews" | "resources" | "schedule" | "sessions";
 export type ArtifactStatus = "ready" | "missing" | "invalid";
 

@@ -28,7 +28,7 @@ const publicQuestion = ({ id, question, options, knowledgePoint }: AssessmentQue
 export class AssessmentManager {
   private readonly assessments = new Map<string, Assessment>();
 
-  constructor(private readonly repository: WorkspaceRepository, private readonly aiService: AiService, private readonly today: () => string) {}
+  constructor(private readonly repository: WorkspaceRepository, private readonly aiService: AiService, private readonly today: () => string, private readonly mode: "real" | "mock" = "mock") {}
 
   async create(courseId: string) {
     const course = await this.repository.getCourse(courseId);
@@ -85,7 +85,7 @@ export class AssessmentManager {
         assessment.diagnosis = undefined;
         throw new AssessmentError("模型返回的诊断结果无效", 502);
       }
-      assessment.files = buildArchiveProposal({ courseRoot: configured.root, assessmentId: id, courseMarkdown, reviewsMarkdown, diagnosis: assessment.diagnosis, answers: assessment.answers.map(({ question, answer, feedback }) => ({ question: question.question, answer: `${answer}. ${question.options[answer.charCodeAt(0) - 65]}`, correctAnswer: feedback.correctPart, explanation: feedback.evidence, score: feedback.score, gap: feedback.gap })), today: this.today() });
+      assessment.files = buildArchiveProposal({ courseRoot: configured.root, assessmentId: id, courseMarkdown, reviewsMarkdown, diagnosis: assessment.diagnosis, answers: assessment.answers.map(({ question, answer, feedback }) => ({ question: question.question, options: question.options, knowledgePoint: question.knowledgePoint, answer: `${answer}. ${question.options[answer.charCodeAt(0) - 65]}`, correctAnswer: feedback.correctPart, explanation: feedback.evidence, score: feedback.score, gap: feedback.gap })), today: this.today(), mode: this.mode });
     }
     return { diagnosis: assessment.diagnosis!, files: assessment.files.map(({ name, before, after }) => ({ name, before, after })) };
   }

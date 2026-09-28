@@ -38,7 +38,7 @@ const imports = new CourseImportManager({
   aiEnricher: aiRuntime.mode === "compatible" ? createCourseImportAi(aiRuntime.config) : undefined,
 });
 await imports.cleanupExpired();
-createApp(repository, events, aiService, imports).listen(port, "127.0.0.1", () => {
+createApp(repository, events, aiService, imports, aiRuntime.mode === "compatible" ? "real" : "mock").listen(port, "127.0.0.1", () => {
   console.log(`Study dashboard server: http://127.0.0.1:${port}`);
   console.log(`Dashboard config: ${config.configPath}`);
   console.log(`Courses: ${config.courses.map((course) => course.id).join(", ")}`);

@@ -22,8 +22,9 @@ export function buildArchiveProposal(params: {
   courseMarkdown: string;
   reviewsMarkdown: string | null;
   diagnosis: DiagnosisResult;
-  answers: Array<{ question: string; answer: string; score: number; gap: string; correctAnswer: string; explanation: string }>;
+  answers: Array<{ question: string; options?: string[]; answer: string; score: number; gap: string; correctAnswer: string; explanation: string; knowledgePoint?: string }>;
   today: string;
+  mode?: "real" | "mock";
 }): ProposedFile[] {
   const { courseRoot, assessmentId, courseMarkdown, diagnosis, answers, today } = params;
   const tasks = diagnosis.remediationTasks.slice(0, 5).map((task) => `- [ ] ${task.replace(/[\r\n]+/g, " ").trim()}`).join("\n");
@@ -48,7 +49,8 @@ export function buildArchiveProposal(params: {
     reviewsAfter = lines.join("\n");
   }
   const initialAverageScore = answers.length ? Math.round(answers.reduce((sum, item) => sum + item.score, 0) / answers.length) : 0;
-  const sessionAfter = `---\nkind: ai-assessment\ncourseId: ${diagnosis.courseId}\nupdated: ${today}\ninitialAverageScore: ${initialAverageScore}\nfinalAverageScore: ${initialAverageScore}\nweakPointCount: ${diagnosis.weakPoints.length}\n---\n# 诊断记录 ${today}\n\n课程：${diagnosis.courseId}\n\n${answers.map((item, index) => `## 第 ${index + 1} 题\n\n问题：${item.question}\n\n选择：${item.answer}\n\n得分：${item.score}/100\n\n正确答案：${item.correctAnswer}\n\n解析：${item.explanation}${item.gap ? `\n\n待改进：${item.gap}` : ""}`).join("\n\n")}\n\n## 补救任务\n\n${tasks || "暂无"}\n`;
+  const singleLine = (value: string) => value.replace(/[\r\n]+/g, " ").trim();
+  const sessionAfter = `---\nkind: ai-assessment\ncourseId: ${diagnosis.courseId}\nupdated: ${today}\nmode: ${params.mode ?? "mock"}\ninitialAverageScore: ${initialAverageScore}\nfinalAverageScore: ${initialAverageScore}\nweakPointCount: ${diagnosis.weakPoints.length}\n---\n# 诊断记录 ${today}\n\n课程：${diagnosis.courseId}\n\n${answers.map((item, index) => `## 第 ${index + 1} 题\n\n问题：${singleLine(item.question)}${item.options ? `\n\n选项：${item.options.map((option, optionIndex) => `${String.fromCharCode(65 + optionIndex)}. ${singleLine(option)}`).join(" | ")}` : ""}${item.knowledgePoint ? `\n\n知识点：${singleLine(item.knowledgePoint)}` : ""}\n\n选择：${singleLine(item.answer)}\n\n得分：${item.score}/100\n\n正确答案：${singleLine(item.correctAnswer)}\n\n解析：${singleLine(item.explanation)}${item.gap ? `\n\n待改进：${singleLine(item.gap)}` : ""}`).join("\n\n")}\n\n## 补救任务\n\n${tasks || "暂无"}\n`;
 
   return [
     { name: "course.md", filePath: path.join(courseRoot, "course.md"), before: courseMarkdown, after: courseAfter, expectedHash: hash(courseMarkdown) },

@@ -17,6 +17,7 @@ import { DocxImportError } from "./docx-extractor.js";
 import { HtmlImportError } from "./html-extractor.js";
 import { PdfImportError } from "./pdf-extractor.js";
 import { TextImportError } from "./text-extractor.js";
+import { readMistakes } from "./session-records.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(currentDirectory, "../../dist");
@@ -27,7 +28,7 @@ function decodeUploadFilename(name: string): string {
   return decoded.includes("\uFFFD") ? name : decoded;
 }
 
-export function createApp(repository: WorkspaceRepository, events: CourseEventBus, aiService?: AiService, imports?: CourseImportManager) {
+export function createApp(repository: WorkspaceRepository, events: CourseEventBus, aiService?: AiService, imports?: CourseImportManager, mode: "real" | "mock" = "mock") {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
@@ -54,6 +55,12 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     } catch (error) {
       next(error);
     }
+  });
+
+  app.get("/api/courses/:id/mistakes", async (request, response, next) => {
+    const configured = repository.config.courses.find((course) => course.id === request.params.id);
+    if (!configured) { response.status(404).json({ error: "未知课程" }); return; }
+    try { response.json(await readMistakes(configured.root, configured.id)); } catch (error) { next(error); }
   });
 
   if (imports) {
@@ -130,7 +137,7 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
 
   if (aiService) {
     const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-    const assessments = new AssessmentManager(repository, aiService, today);
+    const assessments = new AssessmentManager(repository, aiService, today, mode);
     app.post("/api/ai/assessments", async (request, response, next) => {
       try {
         const courseId = request.body?.courseId;
