@@ -1,8 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../App.js";
+import { MistakesPage } from "./MistakesPage.js";
 
 const mistake = {
   id: "mistake-1", courseId: "calculus-101", question: "导数表示什么？",
@@ -71,7 +73,9 @@ describe("MistakesPage", () => {
     const choices = screen.getByRole("group", { name: "选择一个答案" });
     await user.click(within(choices).getByRole("radio", { name: "A. 平均变化" }));
     await user.click(screen.getByRole("button", { name: "提交回答" }));
-    expect(await screen.findByText(/解析：切线斜率对应瞬时变化率/)).toBeInTheDocument();
+    const feedbackStatus = await screen.findByRole("status", { name: "练习反馈" });
+    expect(feedbackStatus).toHaveTextContent(/解析：切线斜率对应瞬时变化率/);
+    expect(feedbackStatus).toHaveFocus();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "提交回答" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "确认保存练习" }));
@@ -82,7 +86,7 @@ describe("MistakesPage", () => {
     expect(calls.find((call) => call.url.endsWith("/answer"))?.body).toEqual({ questionId: "question-2", choice: "A" });
   });
 
-  it("reports loading failures and malformed session warnings", async () => {
+  it("shows a malformed session warning alongside the empty state", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("/mistakes")
       ? response({ items: [], warnings: ["broken.md: 缺少题目作答"] })
@@ -91,5 +95,82 @@ describe("MistakesPage", () => {
     render(<App />);
     expect(await screen.findByText(/暂无已确认的错题/)).toBeInTheDocument();
     expect(screen.getByText(/broken.md: 缺少题目作答/)).toBeInTheDocument();
+  });
+
+  it("shows a load error instead of an empty list when the course request fails", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("/mistakes")
+      ? response({ error: "服务暂不可用" }, 503)
+      : response({ courses: [], recentRecords: [], warningCount: 0 })));
+    window.history.pushState({}, "", "/courses/calculus-101/mistakes");
+    render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("服务暂不可用");
+    expect(screen.queryByText(/暂无已确认的错题/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the newest same-course refresh when an older response arrives last", async () => {
+    const pending: Array<(value: Response) => void> = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input).endsWith("/mistakes")
+      ? new Promise<Response>((resolve) => pending.push(resolve))
+      : Promise.resolve(response({ courses: [], recentRecords: [], warningCount: 0 }))));
+    render(<MemoryRouter><MistakesPage courseId="calculus-101" /></MemoryRouter>);
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await act(async () => pending[0](response({ items: [mistake], warnings: [] })));
+    expect(await screen.findByText("导数表示什么？")).toBeInTheDocument();
+    await act(async () => FakeEventSource.instances.at(-1)?.emit("calculus-101"));
+    await act(async () => FakeEventSource.instances.at(-1)?.emit("calculus-101"));
+    await waitFor(() => expect(pending).toHaveLength(3));
+    const newer = { ...mistake, id: "mistake-new", question: "新的错题" };
+    await act(async () => pending[2](response({ items: [newer], warnings: [] })));
+    expect(await screen.findByText("新的错题")).toBeInTheDocument();
+    await act(async () => pending[1](response({ items: [mistake], warnings: [] })));
+    expect(screen.getByText("新的错题")).toBeInTheDocument();
+    expect(screen.queryByText("导数表示什么？")).not.toBeInTheDocument();
+  });
+
+  it("does not show the previous course's late response after switching courses", async () => {
+    const pending: Array<(value: Response) => void> = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input).endsWith("/mistakes")
+      ? new Promise<Response>((resolve) => pending.push(resolve))
+      : Promise.resolve(response({ courses: [], recentRecords: [], warningCount: 0 }))));
+    const { rerender } = render(<MemoryRouter><MistakesPage courseId="calculus-101" /></MemoryRouter>);
+    await waitFor(() => expect(pending).toHaveLength(1));
+    rerender(<MemoryRouter><MistakesPage courseId="algebra-101" /></MemoryRouter>);
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => pending[1](response({ items: [{ ...mistake, id: "algebra-mistake", courseId: "algebra-101", question: "代数新题" }], warnings: [] })));
+    expect(await screen.findByText("代数新题")).toBeInTheDocument();
+    await act(async () => pending[0](response({ items: [mistake], warnings: [] })));
+    expect(screen.getByText("代数新题")).toBeInTheDocument();
+    expect(screen.queryByText("导数表示什么？")).not.toBeInTheDocument();
+  });
+
+  it("locks a submitted question when the answer response is lost and can generate a fresh session", async () => {
+    let created = 0;
+    let answered = 0;
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/mistakes")) return response({ items: [mistake], warnings: [] });
+      if (url === "/api/practice-sessions") {
+        created += 1;
+        return response({ sessionId: `session-${created}`, mode: "mock", question: { id: `question-${created}`, question: `新题 ${created}`, knowledgePoint: "导数", options: ["平均变化", "瞬时变化", "函数值", "面积"] } }, 201);
+      }
+      if (url.endsWith("/answer")) { answered += 1; throw new TypeError("Failed to fetch"); }
+      return response({ courses: [], recentRecords: [], warningCount: 0 });
+    }));
+    render(<MemoryRouter><MistakesPage courseId="calculus-101" /></MemoryRouter>);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "针对这道错题再练" }));
+    await user.click(await screen.findByRole("radio", { name: "A. 平均变化" }));
+    await user.click(screen.getByRole("button", { name: "提交回答" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/结果未知/);
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交回答" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重新生成新题" }));
+    expect(await screen.findByRole("heading", { name: "新题 2" })).toBeInTheDocument();
+    expect(answered).toBe(1);
+    expect(created).toBe(2);
   });
 });

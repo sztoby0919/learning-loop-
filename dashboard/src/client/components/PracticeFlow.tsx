@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { CourseId, PracticeChoice, PracticeSessionCreated } from "../../shared/course.js";
 import type { AnswerFeedback } from "../../server/ai-types.js";
 import { answerPracticeSession, confirmPracticeSession, createPracticeSession } from "../api.js";
 
-type Phase = "idle" | "creating" | "question" | "answering" | "feedback" | "confirming" | "saved";
+type Phase = "idle" | "creating" | "question" | "answering" | "unknown" | "feedback" | "confirming" | "saved";
 
 export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: CourseId; mistakeId: string; onSaved: () => void }) {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -12,6 +12,11 @@ export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: Cours
   const [choice, setChoice] = useState<PracticeChoice | null>(null);
   const [feedback, setFeedback] = useState<AnswerFeedback | null>(null);
   const [error, setError] = useState("");
+  const feedbackElement = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (phase === "feedback") feedbackElement.current?.focus();
+  }, [phase]);
 
   async function start() {
     setError("");
@@ -36,8 +41,9 @@ export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: Cours
       setFeedback(result.feedback);
       setPhase("feedback");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setPhase("question");
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(`提交结果未知：${message}。请重新生成新题；为避免重复作答，不能再次提交这道题。`);
+      setPhase("unknown");
     }
   }
 
@@ -59,7 +65,7 @@ export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: Cours
     <div className="practice-flow">
       {phase === "idle" && <button type="button" className="btn btn--primary" onClick={start}>针对这道错题再练</button>}
       {phase === "creating" && <p role="status">正在生成针对性新题…</p>}
-      {session && (phase === "question" || phase === "answering" || phase === "feedback" || phase === "confirming") && (
+      {session && (phase === "question" || phase === "answering" || phase === "unknown" || phase === "feedback" || phase === "confirming") && (
         <section aria-label="针对性练习">
           {session.mode === "mock" && <p className="practice-mode" role="note">Mock · 离线演示题，不代表真实掌握</p>}
           <p className="practice-topic">知识点：{session.question.knowledgePoint}</p>
@@ -79,8 +85,9 @@ export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: Cours
               <button type="button" className="btn btn--primary" disabled={!choice || phase === "answering"} onClick={submit}>提交回答</button>
             </>
           )}
+          {phase === "unknown" && <button type="button" className="btn btn--primary" onClick={start}>重新生成新题</button>}
           {feedback && (phase === "feedback" || phase === "confirming") && (
-            <div className="practice-feedback">
+            <div className="practice-feedback" role="status" aria-label="练习反馈" aria-live="polite" tabIndex={-1} ref={feedbackElement}>
               <p>{feedback.isCorrect ? "回答正确" : "回答错误"} · 得分：{feedback.score} / 100</p>
               <p>正确答案：{feedback.correctPart}</p>
               {feedback.gap && <p>{feedback.gap}</p>}

@@ -1,5 +1,5 @@
 import { ArrowLeft } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import type { CourseId, MistakeItem } from "../../shared/course.js";
@@ -12,27 +12,43 @@ export function MistakesPage({ courseId }: { courseId: CourseId }) {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [loadedCourseId, setLoadedCourseId] = useState(courseId);
   const [connection, setConnection] = useState<"connecting" | "live" | "warning">("connecting");
+  const currentCourseId = useRef(courseId);
+  const requestVersion = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
+  currentCourseId.current = courseId;
 
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const load = useCallback(async () => {
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    const version = ++requestVersion.current;
+    const isCurrent = () => !controller.signal.aborted && version === requestVersion.current && currentCourseId.current === courseId;
     try {
-      const result = await fetchMistakes(courseId, signal);
+      const result = await fetchMistakes(courseId, controller.signal);
+      if (!isCurrent()) return;
       setItems(result.items);
       setWarnings(result.warnings);
       setError("");
     } catch (cause) {
-      if (cause instanceof DOMException && cause.name === "AbortError") return;
+      if (!isCurrent()) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (isCurrent()) {
+        setLoadedCourseId(courseId);
+        setLoading(false);
+      }
     }
   }, [courseId]);
 
   useEffect(() => {
     setLoading(true);
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
+    void load();
+    return () => {
+      requestVersion.current += 1;
+      activeRequest.current?.abort();
+    };
   }, [load]);
 
   useEffect(() => {
@@ -49,13 +65,15 @@ export function MistakesPage({ courseId }: { courseId: CourseId }) {
     return () => events.close();
   }, [courseId, load]);
 
+  const showingLoading = loading || loadedCourseId !== courseId;
+
   return <AppShell connection={connection}>
     <div className="mistakes-page">
       <Link className="back-link" to={`/courses/${courseId}`}><ArrowLeft size={18} aria-hidden="true" />返回课程</Link>
       <header className="page-header"><h1>错题本</h1><p>仅收录已确认的错误作答；再练会生成一道同知识点的新题。</p></header>
-      {loading && <p role="status">正在读取错题…</p>}
-      {error && <div className="page-error" role="alert">读取错题失败：{error}</div>}
-      {!loading && !error && <>
+      {showingLoading && <p role="status">正在读取错题…</p>}
+      {!showingLoading && error && <div className="page-error" role="alert">读取错题失败：{error}</div>}
+      {!showingLoading && !error && <>
         {warnings.map((warning) => <p className="inline-warning" role="status" key={warning}>{warning}</p>)}
         {items.length === 0 ? <p className="empty-copy">暂无已确认的错题。完成诊断并确认保存后，错题会出现在这里。</p> : (
           <ol className="mistakes-list">
