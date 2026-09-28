@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -19,10 +19,10 @@ const courseMarkdown = `---\nid: calculus-101\ntitle: 微积分\naccent: "#27624
 const diagnosis: DiagnosisResult = { courseId: "calculus-101", weakPoints: [], remediationTasks: [], nextReviewDate: "2026-10-01", proposedChanges: { courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" } };
 const wrongAnswer = { question: "导数表示什么？", options: ["平均变化率", "瞬时变化率", "函数值", "积分面积"], answer: "A. 平均变化率", score: 0, gap: "理解有误", correctAnswer: "B. 瞬时变化率", explanation: "导数是瞬时变化率。", knowledgePoint: "导数" };
 
-async function courseDirectory() {
+async function courseDirectory(withSessions = true) {
   const root = await mkdtemp(path.join(tmpdir(), "learning-loop-mistakes-"));
   const courseRoot = path.join(root, "calculus-101");
-  await mkdir(path.join(courseRoot, "sessions"), { recursive: true });
+  await mkdir(withSessions ? path.join(courseRoot, "sessions") : courseRoot, { recursive: true });
   await writeFile(path.join(courseRoot, "course.md"), courseMarkdown);
   return courseRoot;
 }
@@ -77,6 +77,39 @@ describe("diagnostic session records", () => {
     const result = await readMistakes(courseRoot, "calculus-101");
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({ question: "极限是什么？", selected: "A. 函数值", correct: "B. 趋近值", mode: "real", knowledgePoint: "极限" });
+  });
+
+  it.each(["targeted-practice", "review-attempt"] as const)("does not index an unconfirmed %s even when updated is present", async (kind) => {
+    const { readMistakes, renderAttemptSession } = await import("./session-records.js");
+    const courseRoot = await courseDirectory();
+    const markdown = renderAttemptSession({ kind, courseId: "calculus-101", confirmedAt: "2026-09-28", mode: "real", question: { question: "极限是什么？", options: ["函数值", "趋近值", "积分", "斜率"], selected: "A", correct: "B", explanation: "极限描述趋近过程。", knowledgePoint: "极限" } }).replace("confirmedAt: 2026-09-28\n", "");
+    await writeFile(path.join(courseRoot, "sessions", `${kind}.md`), markdown);
+    const result = await readMistakes(courseRoot, "calculus-101");
+    expect(result.items).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining(`${kind}.md`)]);
+  });
+
+  it("refuses a sessions directory symlink outside the configured course root", async () => {
+    const { readMistakes } = await import("./session-records.js");
+    const courseRoot = await courseDirectory(false);
+    const externalRoot = await mkdtemp(path.join(tmpdir(), "learning-loop-external-sessions-"));
+    const externalSessions = path.join(externalRoot, "sessions");
+    await mkdir(externalSessions);
+    await writeFile(path.join(externalSessions, "outside.md"), proposal("real")[2].after);
+    await symlink(externalSessions, path.join(courseRoot, "sessions"), "junction");
+    const result = await readMistakes(courseRoot, "calculus-101");
+    expect(result.items).toEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("sessions");
+  });
+
+  it("rejects impossible scores instead of indexing them as mistakes", async () => {
+    const { readMistakes } = await import("./session-records.js");
+    const courseRoot = await courseDirectory();
+    await writeFile(path.join(courseRoot, "sessions", "bad-score.md"), proposal("mock")[2].after.replace("得分：0/100", "得分：101/100"));
+    const result = await readMistakes(courseRoot, "calculus-101");
+    expect(result.items).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("bad-score.md")]);
   });
 
   it("serves configured course mistakes and never exposes a proposed or unsubmitted answer", async () => {

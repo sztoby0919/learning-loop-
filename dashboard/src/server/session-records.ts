@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import matter from "gray-matter";
@@ -60,7 +60,7 @@ function parseSession(raw: string, file: string, courseId: string): MistakeItem[
   const data = parsed.data;
   if (!["ai-assessment", "targeted-practice", "review-attempt"].includes(String(data.kind ?? ""))) return [];
   if (data.courseId !== courseId) throw new Error("courseId 与课程配置不一致");
-  const date = dateText(data.confirmedAt ?? data.updated);
+  const date = dateText(data.confirmedAt ?? (data.kind === "ai-assessment" ? data.updated : undefined));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("缺少有效日期");
   const mode = data.mode === undefined ? "unknown" : data.mode;
   if (mode !== "real" && mode !== "mock" && mode !== "unknown") throw new Error("来源模式无效");
@@ -72,7 +72,7 @@ function parseSession(raw: string, file: string, courseId: string): MistakeItem[
     const correct = field(section, "正确答案");
     const explanation = field(section, "解析");
     const score = field(section, "得分");
-    if (!question || !selected || !correct || !explanation || !/^\d{1,3}\/100$/.test(score)) throw new Error(`第 ${index + 1} 题缺少完整作答`);
+    if (!question || !selected || !correct || !explanation || !/^(?:100|[1-9]?\d)\/100$/.test(score)) throw new Error(`第 ${index + 1} 题缺少完整作答`);
     const selectedLetter = /^([A-D])\./.exec(selected)?.[1];
     const correctLetter = /^([A-D])\./.exec(correct)?.[1];
     const answeredCorrectly = selectedLetter && correctLetter ? selectedLetter === correctLetter : selected === correct;
@@ -96,6 +96,8 @@ export async function readMistakes(courseRoot: string, courseId: string): Promis
   const directory = path.join(courseRoot, "sessions");
   let files;
   try {
+    const details = await lstat(directory);
+    if (details.isSymbolicLink() || !details.isDirectory()) return { items: [], warnings: ["sessions 不是课程目录内的普通文件夹，已忽略"] };
     files = (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith(".md"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { items: [], warnings: [] };
