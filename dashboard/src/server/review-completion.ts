@@ -97,9 +97,13 @@ export function prepareReviewUpdate(rawReviews: string | null, params: ReviewUpd
     throw new ReviewUpdateConflict("复习计划的元数据无效");
   }
   const metadataEnd = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
-  const updatedEntries = lines.slice(1, metadataEnd).flatMap((line, index) => /^updated\s*:/.test(line) ? [{ index: index + 1, value: line.replace(/^updated\s*:\s*/, "").trim() }] : []);
-  const rawUpdated = updatedEntries[0]?.value.replace(/^(?:"(.*)"|'(.*)')$/, (_match, double: string | undefined, single: string | undefined) => double ?? single ?? "");
-  if (String(metadata.courseId ?? "").trim() !== params.courseId || updatedEntries.length !== 1 || !validDate(rawUpdated ?? "")) {
+  const updatedEntries = lines.slice(1, metadataEnd).flatMap((line, index) => /^updated\s*:/.test(line) ? [{ index: index + 1, line }] : []);
+  const updatedMatch = /^(updated\s*:\s*)(?:"([^"]*)"|'([^']*)'|([^\s#]+))(\s+#.*)?\s*$/.exec(updatedEntries[0]?.line ?? "");
+  const rawUpdated = updatedMatch?.[2] ?? updatedMatch?.[3] ?? updatedMatch?.[4] ?? "";
+  const parsedUpdated = metadata.updated instanceof Date
+    ? (Number.isFinite(metadata.updated.getTime()) ? metadata.updated.toISOString().slice(0, 10) : "")
+    : String(metadata.updated ?? "").trim();
+  if (String(metadata.courseId ?? "").trim() !== params.courseId || updatedEntries.length !== 1 || !validDate(rawUpdated) || parsedUpdated !== rawUpdated) {
     throw new ReviewUpdateConflict("复习计划的课程或日期元数据无效");
   }
 
@@ -119,7 +123,8 @@ export function prepareReviewUpdate(rawReviews: string | null, params: ReviewUpd
   if (matches.length) lines[matches[0].index] = newRow;
   else lines.splice(endIndex + 1, 0, newRow);
 
-  lines[updatedEntries[0].index] = `updated: ${params.date}`;
+  const quote = updatedMatch?.[2] !== undefined ? '"' : updatedMatch?.[3] !== undefined ? "'" : "";
+  lines[updatedEntries[0].index] = `${updatedMatch![1]}${quote}${params.date}${quote}${updatedMatch?.[5] ?? ""}`;
   const result = lines.join(eol);
   const parsed = parseReviewsMarkdown(result, "reviews.md", params.date);
   const updated = parsed.items.filter((item) => item.topic === topic);

@@ -84,6 +84,20 @@ describe("prepareReviewUpdate", () => {
     expect(() => prepareReviewUpdate(plan.replace("updated: 2026-09-26", "updated: 2026-13-01"), params)).toThrow(ReviewUpdateConflict);
   });
 
+  it("accepts an inline YAML comment on the date and keeps the annotation", () => {
+    const annotated = plan.replace("updated: 2026-09-26", "updated: 2026-09-26 # audited");
+    const updated = prepareReviewUpdate(annotated, params);
+    expect(updated).toContain("updated: 2026-09-28 # audited");
+    expect(parseReviewsMarkdown(updated, "reviews.md", params.date).updated).toBe(params.date);
+  });
+
+  it("distinguishes a quoted hash in the scalar from an actual YAML comment", () => {
+    const annotated = plan.replace("updated: 2026-09-26", 'updated: "2026-09-26" # audited');
+    expect(prepareReviewUpdate(annotated, params)).toContain('updated: "2026-09-28" # audited');
+    const scalarWithHash = plan.replace("updated: 2026-09-26", 'updated: "2026-09-26 # audited"');
+    expect(() => prepareReviewUpdate(scalarWithHash, params)).toThrow(ReviewUpdateConflict);
+  });
+
   it("rejects a next date outside the supported YYYY-MM-DD range", () => {
     expect(() => prepareReviewUpdate(null, { ...params, date: "9999-12-31" })).toThrow(ReviewUpdateConflict);
   });
