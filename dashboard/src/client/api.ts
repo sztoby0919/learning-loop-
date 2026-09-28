@@ -36,6 +36,10 @@ export function createPracticeSession(courseId: CourseId, mistakeId: string): Pr
   return importRequest("/api/practice-sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courseId, mistakeId, kind: "targeted-practice" }) });
 }
 
+export function createReviewSession(courseId: CourseId, topic: string): Promise<PracticeSessionCreated> {
+  return importRequest("/api/practice-sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courseId, topic, kind: "review-attempt" }) });
+}
+
 export function answerPracticeSession(sessionId: string, questionId: string, choice: PracticeChoice): Promise<{ feedback: AnswerFeedback }> {
   return importRequest(`/api/practice-sessions/${encodeURIComponent(sessionId)}/answer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ questionId, choice }) });
 }

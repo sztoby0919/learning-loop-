@@ -2,16 +2,20 @@ import { useEffect, useRef, useState } from "react";
 
 import type { CourseId, PracticeChoice, PracticeSessionCreated } from "../../shared/course.js";
 import type { AnswerFeedback } from "../../server/ai-types.js";
-import { answerPracticeSession, confirmPracticeSession, createPracticeSession } from "../api.js";
+import { answerPracticeSession, confirmPracticeSession, createPracticeSession, createReviewSession } from "../api.js";
 
 type Phase = "idle" | "creating" | "question" | "answering" | "unknown" | "feedback" | "confirming" | "saved";
 
-export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: CourseId; mistakeId: string; onSaved: () => void }) {
+type PracticeFlowProps = { courseId: CourseId; onSaved: () => void } & ({ mistakeId: string; topic?: never } | { topic: string; mistakeId?: never });
+
+export function PracticeFlow({ courseId, mistakeId, topic, onSaved }: PracticeFlowProps) {
+  const isReview = topic !== undefined;
   const [phase, setPhase] = useState<Phase>("idle");
   const [session, setSession] = useState<PracticeSessionCreated | null>(null);
   const [choice, setChoice] = useState<PracticeChoice | null>(null);
   const [feedback, setFeedback] = useState<AnswerFeedback | null>(null);
   const [error, setError] = useState("");
+  const [advanced, setAdvanced] = useState(false);
   const feedbackElement = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -22,7 +26,7 @@ export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: Cours
     setError("");
     setPhase("creating");
     try {
-      setSession(await createPracticeSession(courseId, mistakeId));
+      setSession(await (topic !== undefined ? createReviewSession(courseId, topic) : createPracticeSession(courseId, mistakeId!)));
       setChoice(null);
       setFeedback(null);
       setPhase("question");
@@ -52,7 +56,8 @@ export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: Cours
     setError("");
     setPhase("confirming");
     try {
-      await confirmPracticeSession(session.sessionId);
+      const result = await confirmPracticeSession(session.sessionId);
+      setAdvanced(result.advanced === true);
       setPhase("saved");
       onSaved();
     } catch (cause) {
@@ -63,10 +68,10 @@ export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: Cours
 
   return (
     <div className="practice-flow">
-      {phase === "idle" && <button type="button" className="btn btn--primary" onClick={start}>针对这道错题再练</button>}
-      {phase === "creating" && <p role="status">正在生成针对性新题…</p>}
+      {phase === "idle" && <button type="button" className="btn btn--primary" onClick={start}>{isReview ? "开始复习" : "针对这道错题再练"}</button>}
+      {phase === "creating" && <p role="status">{isReview ? "正在生成复习题…" : "正在生成针对性新题…"}</p>}
       {session && (phase === "question" || phase === "answering" || phase === "unknown" || phase === "feedback" || phase === "confirming") && (
-        <section aria-label="针对性练习">
+        <section aria-label={isReview ? "复习作答" : "针对性练习"}>
           {session.mode === "mock" && <p className="practice-mode" role="note">Mock · 离线演示题，不代表真实掌握</p>}
           <p className="practice-topic">知识点：{session.question.knowledgePoint}</p>
           <h3>{session.question.question}</h3>
@@ -92,12 +97,13 @@ export function PracticeFlow({ courseId, mistakeId, onSaved }: { courseId: Cours
               <p>正确答案：{feedback.correctPart}</p>
               {feedback.gap && <p>{feedback.gap}</p>}
               <p>解析：{feedback.evidence}</p>
-              <button type="button" className="btn btn--primary" disabled={phase === "confirming"} onClick={confirm}>{phase === "confirming" ? "正在保存…" : "确认保存练习"}</button>
+              {isReview && <p>{session.mode === "mock" ? "演示题只保存作答记录，不改变真实复习计划。" : "确认后保存本次作答，并根据作答结果更新该知识点的下次复习日期。"}</p>}
+              <button type="button" className="btn btn--primary" disabled={phase === "confirming"} onClick={confirm}>{phase === "confirming" ? "正在保存…" : isReview ? session.mode === "mock" ? "保存演示作答（不推进复习）" : "确认保存并更新复习计划" : "确认保存练习"}</button>
             </div>
           )}
         </section>
       )}
-      {phase === "saved" && <p className="practice-saved" role="status">{session?.mode === "mock" ? "Mock · 演示练习已保存；这不代表真实掌握。" : "练习记录已保存。"}</p>}
+      {phase === "saved" && <p className="practice-saved" role="status">{isReview ? session?.mode === "mock" ? "Mock · 演示作答已保存，复习计划未推进。" : advanced ? "复习作答已保存，复习计划已更新。" : "复习作答已保存，复习计划未推进。" : session?.mode === "mock" ? "Mock · 演示练习已保存；这不代表真实掌握。" : "练习记录已保存。"}</p>}
       {error && <p className="inline-warning" role="alert">{error}</p>}
     </div>
   );

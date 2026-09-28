@@ -10,6 +10,7 @@ export interface AttemptRecord {
   kind: "targeted-practice" | "review-attempt";
   courseId: string;
   confirmedAt: string;
+  completedAt?: string;
   mode: "real" | "mock";
   question: {
     question: string;
@@ -31,7 +32,56 @@ export function renderAttemptSession(record: AttemptRecord): string {
   if (!oneLine(record.question.question) || !oneLine(record.question.knowledgePoint) || !oneLine(record.question.explanation)) throw new Error("作答记录缺少必要内容");
   const { question, options, selected, correct, explanation, knowledgePoint } = record.question;
   const choice = (letter: "A" | "B" | "C" | "D") => `${letter}. ${oneLine(options[letter.charCodeAt(0) - 65])}`;
-  return `---\nkind: ${record.kind}\ncourseId: ${record.courseId}\nupdated: ${record.confirmedAt}\nconfirmedAt: ${record.confirmedAt}\nmode: ${record.mode}\n---\n# ${record.kind === "targeted-practice" ? "定向练习" : "复习作答"}记录 ${record.confirmedAt}\n\n## 第 1 题\n\n问题：${oneLine(question)}\n\n选项：${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${oneLine(option)}`).join(" | ")}\n\n知识点：${oneLine(knowledgePoint)}\n\n选择：${choice(selected)}\n\n得分：${selected === correct ? 100 : 0}/100\n\n正确答案：${choice(correct)}\n\n解析：${oneLine(explanation)}\n`;
+  const completed = record.completedAt ? `completedAt: ${new Date(record.completedAt).toISOString()}\n` : "";
+  return `---\nkind: ${record.kind}\ncourseId: ${record.courseId}\nupdated: ${record.confirmedAt}\nconfirmedAt: ${record.confirmedAt}\n${completed}mode: ${record.mode}\n---\n# ${record.kind === "targeted-practice" ? "定向练习" : "复习作答"}记录 ${record.confirmedAt}\n\n## 第 1 题\n\n问题：${oneLine(question)}\n\n选项：${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${oneLine(option)}`).join(" | ")}\n\n知识点：${oneLine(knowledgePoint)}\n\n选择：${choice(selected)}\n\n得分：${selected === correct ? 100 : 0}/100\n\n正确答案：${choice(correct)}\n\n解析：${oneLine(explanation)}\n`;
+}
+
+// Dates on a plan are not attempts. Only complete, confirmed real review records
+// contribute to the streak; uncertain legacy ordering is handled conservatively.
+export async function readReviewStreak(courseRoot: string, courseId: string, topic: string, today: string): Promise<number> {
+  const directory = path.join(courseRoot, "sessions");
+  let files;
+  try {
+    const details = await lstat(directory);
+    if (!details.isDirectory() || details.isSymbolicLink()) throw new Error("sessions 目录不可读");
+    files = (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith(".md"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+  const attempts: Array<{ date: string; time: number | null; correct: boolean }> = [];
+  for (const file of files) {
+    try {
+      const parsed = matter(await readFile(path.join(directory, file.name), "utf8"));
+      if (parsed.data.kind !== "review-attempt" || parsed.data.mode !== "real" || parsed.data.courseId !== courseId) continue;
+      const date = dateText(parsed.data.confirmedAt);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date || date > today) continue;
+      const sections = questionSections(parsed.content);
+      if (sections.length !== 1 || field(sections[0], "知识点") !== topic) continue;
+      const section = sections[0];
+      const selected = /^([A-D])\.\s*\S/.exec(field(section, "选择"))?.[1];
+      const correct = /^([A-D])\.\s*\S/.exec(field(section, "正确答案"))?.[1];
+      const score = field(section, "得分");
+      const complete = selected && correct && field(section, "问题") && field(section, "解析") && field(section, "选项");
+      const isCorrect = Boolean(complete && selected === correct && score === "100/100");
+      const timestamp = parsed.data.completedAt instanceof Date ? parsed.data.completedAt.getTime() : Date.parse(String(parsed.data.completedAt ?? ""));
+      attempts.push({ date, time: Number.isFinite(timestamp) ? timestamp : null, correct: isCorrect });
+    } catch {
+      // A malformed session may hide an intervening failure; do not infer a streak.
+      return 0;
+    }
+  }
+  let streak = 0;
+  for (const date of [...new Set(attempts.map((attempt) => attempt.date))].sort()) {
+    const day = attempts.filter((attempt) => attempt.date === date);
+    const certain = day.every((attempt) => attempt.time !== null) && new Set(day.map((attempt) => attempt.time)).size === day.length;
+    if (!certain) {
+      streak = day.every((attempt) => attempt.correct) ? streak + day.length : 0;
+    } else {
+      for (const attempt of day.sort((a, b) => a.time! - b.time!)) streak = attempt.correct ? streak + 1 : 0;
+    }
+  }
+  return streak;
 }
 
 function field(section: string, label: string): string {

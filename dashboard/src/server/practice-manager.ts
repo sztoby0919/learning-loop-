@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 
@@ -7,9 +7,12 @@ import type { AiService } from "./ai-service.js";
 import type { AnswerFeedback, AssessmentQuestion, PublicAssessmentQuestion } from "./ai-types.js";
 import { validateAssessmentQuestions } from "./ai-validators.js";
 import { AssessmentError } from "./assessment-manager.js";
-import { batchAtomicWrite } from "./file-utils.js";
+import { batchAtomicWrite, safeReadFile } from "./file-utils.js";
 import { AiResponseFormatError } from "./openai-compatible-provider.js";
-import { readMistakes, renderAttemptSession } from "./session-records.js";
+import { readMistakes, readReviewStreak, renderAttemptSession } from "./session-records.js";
+import { prepareReviewUpdate, ReviewUpdateConflict } from "./review-completion.js";
+import { parseReviewsMarkdown } from "./artifact-parser.js";
+import { scheduleReviewsForCourse } from "./review-scheduler.js";
 import type { WorkspaceRepository } from "./workspace-repository.js";
 
 type Choice = "A" | "B" | "C" | "D";
@@ -49,10 +52,13 @@ interface PracticeSession {
   choice?: Choice;
   confirmed: boolean;
   confirming: boolean;
+  kind: "targeted-practice" | "review-attempt";
+  review?: { topic: string; raw: string | null; hash: string | null };
 }
 
 export class PracticeManager {
   private readonly sessions = new Map<string, PracticeSession>();
+  private readonly pendingWrites = new Map<string, Promise<void>>();
 
   constructor(
     private readonly repository: WorkspaceRepository,
@@ -62,30 +68,51 @@ export class PracticeManager {
     private readonly now: () => number = Date.now,
   ) {}
 
-  async create(params: { courseId: string; mistakeId: string; kind: "targeted-practice" }): Promise<PracticeSessionCreated> {
-    if (params.kind !== "targeted-practice") throw new AssessmentError("练习类型无效", 400);
+  async create(params: { courseId: string; mistakeId: string; kind: "targeted-practice" } | { courseId: string; topic: string; kind: "review-attempt" }): Promise<PracticeSessionCreated> {
+    if (params.kind !== "targeted-practice" && params.kind !== "review-attempt") throw new AssessmentError("练习类型无效", 400);
     const configured = this.repository.config.courses.find((course) => course.id === params.courseId);
     if (!configured) throw new AssessmentError("未知课程", 404);
     const course = await this.repository.getCourse(params.courseId);
     if (!course) throw new AssessmentError("课程档案不可用", 409);
-    const { items } = await readMistakes(configured.root, configured.id);
-    const mistake = items.find((item) => item.id === params.mistakeId);
-    if (!mistake) throw new AssessmentError("错题不存在或尚未确认", 404);
-
-    const context = [
-      `课程关键知识：\n${course.keyPointsMarkdown.slice(0, 12_000)}`,
-      `原错题：${mistake.question}`,
-      `知识点：${mistake.knowledgePoint ?? "未标注"}`,
-      `上次选择：${mistake.selected}`,
-      `正确答案：${mistake.correct}`,
-      `解析：${mistake.explanation}`,
-      "请围绕同一知识点生成一道不同于原错题的新四选一单选题，不要复用原题题干。",
-    ].join("\n");
+    let sourceQuestion: string | undefined;
+    let topic: string;
+    let review: PracticeSession["review"];
+    const contextParts = [`课程关键知识：\n${course.keyPointsMarkdown.slice(0, 12_000)}`];
+    if (params.kind === "targeted-practice") {
+      const { items } = await readMistakes(configured.root, configured.id);
+      const mistake = items.find((item) => item.id === params.mistakeId);
+      if (!mistake) throw new AssessmentError("错题不存在或尚未确认", 404);
+      sourceQuestion = mistake.question;
+      topic = mistake.knowledgePoint ?? "";
+      contextParts.push(
+        `原错题：${mistake.question}`,
+        `知识点：${mistake.knowledgePoint ?? "未标注"}`,
+        `上次选择：${mistake.selected}`,
+        `正确答案：${mistake.correct}`,
+        `解析：${mistake.explanation}`,
+        "请围绕同一知识点生成一道不同于原错题的新四选一单选题，不要复用原题题干。",
+      );
+    } else {
+      topic = params.topic.trim();
+      if (!topic) throw new AssessmentError("复习主题无效", 400);
+      const reviewsPath = path.join(configured.root, "reviews.md");
+      try {
+        const details = await lstat(reviewsPath);
+        if (!details.isFile() || details.isSymbolicLink()) throw new AssessmentError("复习计划不是普通文件", 409);
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      const raw = await safeReadFile(reviewsPath);
+      const explicit = raw === null ? [] : parseReviewsMarkdown(raw, reviewsPath, this.today()).items;
+      const registered = explicit.some((item) => item.topic === topic) || scheduleReviewsForCourse(course, this.today()).some((item) => item.topic === topic);
+      if (!registered) throw new AssessmentError("复习主题不存在或尚未登记", 404);
+      review = { topic, raw, hash: raw === null ? null : createHash("sha256").update(raw).digest("hex") };
+      contextParts.push(`复习知识点：${topic}`, "请围绕该知识点生成一道四选一单选复习题，知识点字段必须与复习知识点完全一致。");
+    }
+    const context = contextParts.join("\n");
     let generated: AssessmentQuestion[];
     try {
       generated = await this.aiService.generateAssessmentQuestions({
         courseId: params.courseId,
-        topic: mistake.knowledgePoint ?? course.title,
+        topic: topic || course.title,
         count: 1,
         context,
       });
@@ -100,8 +127,8 @@ export class PracticeManager {
       || !generated[0].explanation.trim()
       || !generated[0].knowledgePoint.trim()
       || new Set(generated[0].options.map(normalizeOption)).size !== 4
-      || normalizeQuestion(generated[0].question) === normalizeQuestion(mistake.question)
-      || (mistake.knowledgePoint && normalizeQuestion(generated[0].knowledgePoint) !== normalizeQuestion(mistake.knowledgePoint))
+      || (sourceQuestion && normalizeQuestion(generated[0].question) === normalizeQuestion(sourceQuestion))
+      || (topic && normalizeQuestion(generated[0].knowledgePoint) !== normalizeQuestion(topic))
       || hasAnswerCue(generated[0])
     ) {
       throw new AssessmentError("模型生成的练习题无效或与原题相同，请重试", 502);
@@ -110,7 +137,7 @@ export class PracticeManager {
       ? { ...generated[0], question: `【离线演示】${generated[0].question}` }
       : generated[0];
     const id = randomUUID();
-    this.sessions.set(id, { id, courseId: params.courseId, question, createdAt: this.now(), confirmed: false, confirming: false });
+    this.sessions.set(id, { id, courseId: params.courseId, question, createdAt: this.now(), confirmed: false, confirming: false, kind: params.kind, review });
     return { sessionId: id, question: publicQuestion(question), mode: this.mode };
   }
 
@@ -149,6 +176,11 @@ export class PracticeManager {
     const configured = this.repository.config.courses.find((course) => course.id === session.courseId);
     if (!configured) throw new AssessmentError("课程档案不可用", 409);
     session.confirming = true;
+    const previousWrite = this.pendingWrites.get(configured.root);
+    let releaseWrite!: () => void;
+    const currentWrite = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    this.pendingWrites.set(configured.root, currentWrite);
+    await previousWrite;
     try {
       const directory = path.join(configured.root, "sessions");
       try {
@@ -161,18 +193,36 @@ export class PracticeManager {
       const fileName = `${confirmedAt}-${session.id}.md`;
       const filePath = path.join(directory, fileName);
       const content = renderAttemptSession({
-        kind: "targeted-practice", courseId: session.courseId, confirmedAt, mode: this.mode,
+        kind: session.kind, courseId: session.courseId, confirmedAt, mode: this.mode,
+        ...(session.review ? { completedAt: new Date(this.now()).toISOString() } : {}),
         question: {
           question: session.question.question, options: session.question.options,
           selected: session.choice, correct: session.question.answer as Choice,
-          explanation: session.question.explanation, knowledgePoint: session.question.knowledgePoint,
+          explanation: session.question.explanation, knowledgePoint: session.review?.topic ?? session.question.knowledgePoint,
         },
       });
-      const result = await batchAtomicWrite([{ filePath, content, expectedHash: null }]);
+      const operations: Parameters<typeof batchAtomicWrite>[0] = [{ filePath, content, expectedHash: null }];
+      const advanced = Boolean(session.review && this.mode === "real");
+      if (session.review && advanced) {
+        const priorConsecutiveCorrectReviews = await readReviewStreak(configured.root, session.courseId, session.review.topic, confirmedAt);
+        const isCorrect = session.choice === session.question.answer;
+        try {
+          operations.push({ filePath: path.join(configured.root, "reviews.md"), expectedHash: session.review.hash, content: prepareReviewUpdate(session.review.raw, {
+            courseId: session.courseId, topic: session.review.topic, date: confirmedAt, isCorrect, priorConsecutiveCorrectReviews,
+            evidence: `${isCorrect ? "答对" : "答错"} · ${isCorrect ? 100 : 0}/100 · sessions/${fileName}`,
+          }) });
+        } catch (error) {
+          if (error instanceof ReviewUpdateConflict) throw new AssessmentError(error.message, 409);
+          throw error;
+        }
+      }
+      const result = await batchAtomicWrite(operations);
       if (!result.success) throw new AssessmentError(result.error ?? "保存练习失败", result.conflict ? 409 : 500);
       session.confirmed = true;
-      return { courseId: session.courseId, mode: this.mode, sessionFile: fileName };
+      return { courseId: session.courseId, mode: this.mode, sessionFile: fileName, ...(session.review ? { advanced } : {}) };
     } finally {
+      releaseWrite();
+      if (this.pendingWrites.get(configured.root) === currentWrite) this.pendingWrites.delete(configured.root);
       session.confirming = false;
     }
   }

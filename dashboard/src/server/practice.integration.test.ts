@@ -59,7 +59,7 @@ async function setup(aiProvider: AiProvider = provider, mode: "real" | "mock" = 
   const events = new CourseEventBus();
   const app = createApp(repository, events, new AiService({ provider: aiProvider, maxRetries: 0 }), undefined, mode);
   const mistakeId = (await readMistakes(courseRoot, "calculus-101")).items[0].id;
-  return { app, courseRoot, events, mistakeId };
+  return { app, courseRoot, events, mistakeId, repository };
 }
 
 describe("targeted practice API", () => {
@@ -122,5 +122,116 @@ describe("targeted practice API", () => {
     const result = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" }).expect(502);
     expect(result.body.error).toContain("生成练习题失败");
     expect(result.body.error).not.toContain("private provider detail");
+  });
+});
+
+const reviewsMarkdown = `---
+courseId: calculus-101
+updated: 2026-09-20
+---
+# 手工计划
+
+| 知识点 | 上次复习 | 下次复习 | 掌握度 1-10 | 复习证据 |
+| --- | --- | --- | ---: | --- |
+| 导数 | 2026-09-20 | 2026-09-21 | 6 | 手工证据 |
+| 积分 | 2026-09-20 | 2026-10-20 | 8 | 保留这一行 |
+
+手写备注，必须保留。
+`;
+
+async function setupReview(mode: "real" | "mock" = "real") {
+  const setupResult = await setup(provider, mode);
+  await writeFile(path.join(setupResult.courseRoot, "reviews.md"), reviewsMarkdown);
+  return setupResult;
+}
+
+async function answerReview(app: ReturnType<typeof createApp>, choice = "B") {
+  const created = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", topic: "导数", kind: "review-attempt" }).expect(201);
+  expect(created.body.question).not.toHaveProperty("answer");
+  expect(created.body.question).not.toHaveProperty("explanation");
+  await request(app).post(`/api/practice-sessions/${created.body.sessionId}/answer`).send({ questionId: "q-new", choice }).expect(200);
+  return created.body.sessionId as string;
+}
+
+describe("review completion API", () => {
+  it("accepts a registered topic and rejects an unknown course, topic, or empty topic", async () => {
+    const { app } = await setupReview();
+    for (const [courseId, topic, status] of [["unknown", "导数", 404], ["calculus-101", "伪造主题", 404], ["calculus-101", "  ", 400]] as const) {
+      await request(app).post("/api/practice-sessions").send({ courseId, topic, kind: "review-attempt" }).expect(status);
+    }
+    await answerReview(app);
+  });
+
+  it("atomically saves real evidence and one review row, refreshes calendar/due data, and survives restart", async () => {
+    const { app, repository, courseRoot, events } = await setupReview();
+    const published = vi.spyOn(events, "publish");
+    const id = await answerReview(app);
+    const confirmed = await request(app).post(`/api/practice-sessions/${id}/confirm`).expect(200);
+    expect(confirmed.body).toMatchObject({ advanced: true, mode: "real" });
+    const raw = await readFile(path.join(courseRoot, "reviews.md"), "utf8");
+    expect(raw).toContain("| 积分 | 2026-09-20 | 2026-10-20 | 8 | 保留这一行 |");
+    expect(raw).toContain("手写备注，必须保留。");
+    expect(raw).toContain(confirmed.body.sessionFile);
+    expect(raw).toContain("答对");
+    expect(await readFile(path.join(courseRoot, "course.md"), "utf8")).toBe(courseMarkdown);
+    const session = await readFile(path.join(courseRoot, "sessions", confirmed.body.sessionFile), "utf8");
+    expect(session).toContain("kind: review-attempt");
+    expect(session).toContain("completedAt:");
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    const next = new Date(Date.parse(`${today}T00:00:00Z`) + 3 * 86_400_000).toISOString().slice(0, 10);
+    const restarted = createApp(new WorkspaceRepository(repository.config, () => today), new CourseEventBus(), new AiService({ provider }), undefined, "real");
+    const reviews = await request(restarted).get("/api/reviews").expect(200);
+    expect(reviews.body).toContainEqual(expect.objectContaining({ topic: "导数", lastReviewed: today, nextReview: next, mastery: 6 }));
+    const calendar = await request(restarted).get(`/api/calendar?month=${next.slice(0, 7)}`).expect(200);
+    expect(calendar.body).toContainEqual(expect.objectContaining({ title: "复习：导数", date: next }));
+    const due = await request(restarted).get("/api/reviews/due").expect(200);
+    expect(due.body).toContainEqual(expect.objectContaining({ topic: "导数", nextReviewDate: next }));
+    expect(published).toHaveBeenCalledWith("journal-updated", { courseId: "calculus-101", artifact: "reviews" });
+    await request(app).post(`/api/practice-sessions/${id}/confirm`).expect(409);
+    expect(await readdir(path.join(courseRoot, "sessions"))).toHaveLength(2);
+  });
+
+  it("saves a marked Mock session without advancing any review dates", async () => {
+    const { app, courseRoot } = await setupReview("mock");
+    const id = await answerReview(app);
+    const saved = await request(app).post(`/api/practice-sessions/${id}/confirm`).expect(200);
+    expect(saved.body).toMatchObject({ mode: "mock", advanced: false });
+    expect(await readFile(path.join(courseRoot, "reviews.md"), "utf8")).toBe(reviewsMarkdown);
+    const raw = await readFile(path.join(courseRoot, "sessions", saved.body.sessionFile), "utf8");
+    expect(raw).toContain("mode: mock");
+    expect(raw).toContain("离线演示");
+  });
+
+  it("keeps both files unchanged when the review snapshot conflicts with a manual edit", async () => {
+    const { app, courseRoot } = await setupReview();
+    const id = await answerReview(app);
+    const edited = `${reviewsMarkdown}\n新增人工备注\n`;
+    await writeFile(path.join(courseRoot, "reviews.md"), edited);
+    const result = await request(app).post(`/api/practice-sessions/${id}/confirm`).expect(409);
+    expect(result.body.error).toMatch(/冲突|修改/);
+    expect(await readFile(path.join(courseRoot, "reviews.md"), "utf8")).toBe(edited);
+    expect(await readdir(path.join(courseRoot, "sessions"))).toEqual(["old.md"]);
+  });
+
+  it("rejects a colliding session filename before changing either file", async () => {
+    const { app, courseRoot } = await setupReview();
+    const id = await answerReview(app);
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    const file = path.join(courseRoot, "sessions", `${today}-${id}.md`);
+    await writeFile(file, "已有内容");
+    await request(app).post(`/api/practice-sessions/${id}/confirm`).expect(409);
+    expect(await readFile(file, "utf8")).toBe("已有内容");
+    expect(await readFile(path.join(courseRoot, "reviews.md"), "utf8")).toBe(reviewsMarkdown);
+  });
+
+  it("serializes competing confirmations so only one matching snapshot can advance", async () => {
+    const { app, courseRoot } = await setupReview();
+    const first = await answerReview(app, "B");
+    const second = await answerReview(app, "A");
+    const results = await Promise.all([first, second].map((id) => request(app).post(`/api/practice-sessions/${id}/confirm`)));
+    expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
+    expect(await readdir(path.join(courseRoot, "sessions"))).toHaveLength(2);
+    const saved = results.find((result) => result.status === 200)!;
+    expect(await readFile(path.join(courseRoot, "reviews.md"), "utf8")).toContain(saved.body.sessionFile);
   });
 });

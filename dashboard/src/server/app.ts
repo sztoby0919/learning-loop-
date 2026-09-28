@@ -142,11 +142,15 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     const practices = new PracticeManager(repository, aiService, today, mode);
     app.post("/api/practice-sessions", async (request, response, next) => {
       try {
-        const { courseId, mistakeId, kind } = request.body ?? {};
-        if (typeof courseId !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(courseId) || typeof mistakeId !== "string" || !mistakeId || kind !== "targeted-practice") {
+        const { courseId, mistakeId, topic, kind } = request.body ?? {};
+        if (typeof courseId !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(courseId)) {
           throw new AssessmentError("练习参数无效", 400);
         }
-        response.status(201).json(await practices.create({ courseId, mistakeId, kind }));
+        if (kind === "targeted-practice" && typeof mistakeId === "string" && mistakeId) {
+          response.status(201).json(await practices.create({ courseId, mistakeId, kind }));
+        } else if (kind === "review-attempt" && typeof topic === "string" && topic.trim()) {
+          response.status(201).json(await practices.create({ courseId, topic, kind }));
+        } else throw new AssessmentError("练习参数无效", 400);
       } catch (error) { next(error); }
     });
     app.post("/api/practice-sessions/:id/answer", async (request, response, next) => {
@@ -159,6 +163,10 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     app.post("/api/practice-sessions/:id/confirm", async (request, response, next) => {
       try {
         const result = await practices.confirm(request.params.id as string);
+        if (result.advanced) {
+          await repository.refresh(result.courseId, "reviews");
+          events.publish("journal-updated", { courseId: result.courseId, artifact: "reviews" });
+        }
         await repository.refresh(result.courseId, "sessions");
         events.publish("journal-updated", { courseId: result.courseId, artifact: "sessions" });
         response.json(result);

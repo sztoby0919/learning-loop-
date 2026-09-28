@@ -30,6 +30,7 @@ export interface PracticeSessionConfirmed {
   courseId: CourseId;
   mode: "real" | "mock";
   sessionFile: string;
+  advanced?: boolean;
 }
 
 export type ArtifactKind = "course" | "notes" | "reviews" | "resources" | "schedule" | "sessions";
