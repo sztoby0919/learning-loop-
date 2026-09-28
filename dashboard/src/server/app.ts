@@ -18,6 +18,7 @@ import { HtmlImportError } from "./html-extractor.js";
 import { PdfImportError } from "./pdf-extractor.js";
 import { TextImportError } from "./text-extractor.js";
 import { readMistakes } from "./session-records.js";
+import { PracticeManager } from "./practice-manager.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(currentDirectory, "../../dist");
@@ -138,6 +139,31 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
   if (aiService) {
     const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
     const assessments = new AssessmentManager(repository, aiService, today, mode);
+    const practices = new PracticeManager(repository, aiService, today, mode);
+    app.post("/api/practice-sessions", async (request, response, next) => {
+      try {
+        const { courseId, mistakeId, kind } = request.body ?? {};
+        if (typeof courseId !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(courseId) || typeof mistakeId !== "string" || !mistakeId || kind !== "targeted-practice") {
+          throw new AssessmentError("练习参数无效", 400);
+        }
+        response.status(201).json(await practices.create({ courseId, mistakeId, kind }));
+      } catch (error) { next(error); }
+    });
+    app.post("/api/practice-sessions/:id/answer", async (request, response, next) => {
+      try {
+        const { questionId, choice } = request.body ?? {};
+        if (typeof questionId !== "string" || typeof choice !== "string") throw new AssessmentError("答案无效", 400);
+        response.json(await practices.answer(request.params.id as string, questionId, choice as "A" | "B" | "C" | "D"));
+      } catch (error) { next(error); }
+    });
+    app.post("/api/practice-sessions/:id/confirm", async (request, response, next) => {
+      try {
+        const result = await practices.confirm(request.params.id as string);
+        await repository.refresh(result.courseId, "sessions");
+        events.publish("journal-updated", { courseId: result.courseId, artifact: "sessions" });
+        response.json(result);
+      } catch (error) { next(error); }
+    });
     app.post("/api/ai/assessments", async (request, response, next) => {
       try {
         const courseId = request.body?.courseId;

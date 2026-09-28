@@ -1,4 +1,5 @@
-import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, NoteDocument, ResourceItem, ReviewItem, ScheduledReview, TaskReference } from "../shared/course.js";
+import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, NoteDocument, PracticeChoice, PracticeSessionConfirmed, PracticeSessionCreated, ResourceItem, ReviewItem, ScheduledReview, TaskReference } from "../shared/course.js";
+import type { AnswerFeedback } from "../server/ai-types.js";
 import type { SettingsData } from "./pages/SettingsPage.js";
 
 async function requestJson<T>(url: string, signal?: AbortSignal): Promise<T> {
@@ -26,6 +27,18 @@ export const fetchResources = (signal?: AbortSignal) => requestJson<ResourceItem
 export const fetchCalendar = (month: string, signal?: AbortSignal) => requestJson<CalendarEvent[]>(`/api/calendar?month=${encodeURIComponent(month)}`, signal);
 export const fetchStats = (signal?: AbortSignal) => requestJson<LearningStats>("/api/stats", signal);
 export const fetchSettings = (signal?: AbortSignal) => requestJson<SettingsData>("/api/settings", signal);
+
+export function createPracticeSession(courseId: CourseId, mistakeId: string): Promise<PracticeSessionCreated> {
+  return importRequest("/api/practice-sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courseId, mistakeId, kind: "targeted-practice" }) });
+}
+
+export function answerPracticeSession(sessionId: string, questionId: string, choice: PracticeChoice): Promise<{ feedback: AnswerFeedback }> {
+  return importRequest(`/api/practice-sessions/${encodeURIComponent(sessionId)}/answer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ questionId, choice }) });
+}
+
+export function confirmPracticeSession(sessionId: string): Promise<PracticeSessionConfirmed> {
+  return importRequest(`/api/practice-sessions/${encodeURIComponent(sessionId)}/confirm`, { method: "POST" });
+}
 
 export interface CourseImportPreview {
   id: string;

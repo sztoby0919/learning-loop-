@@ -13,6 +13,25 @@ export interface MistakeItem {
   mode: "real" | "mock" | "unknown";
 }
 
+export type PracticeChoice = "A" | "B" | "C" | "D";
+
+export interface PracticeSessionCreated {
+  sessionId: string;
+  question: {
+    id: string;
+    question: string;
+    options: string[];
+    knowledgePoint: string;
+  };
+  mode: "real" | "mock";
+}
+
+export interface PracticeSessionConfirmed {
+  courseId: CourseId;
+  mode: "real" | "mock";
+  sessionFile: string;
+}
+
 export type ArtifactKind = "course" | "notes" | "reviews" | "resources" | "schedule" | "sessions";
 export type ArtifactStatus = "ready" | "missing" | "invalid";
 
