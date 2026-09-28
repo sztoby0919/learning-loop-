@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { DiagnosisResult } from "./ai-types.js";
 import { parseReviewsMarkdown } from "./artifact-parser.js";
+import { locateReviewTable, ReviewUpdateConflict } from "./review-completion.js";
 
 export interface ProposedFile {
   name: string;
@@ -39,11 +40,14 @@ export function buildArchiveProposal(params: {
   const rows = diagnosis.weakPoints.slice(0, 5).map((point) => `| ${tableCell(point.knowledgePoint)} |  | ${diagnosis.nextReviewDate} |  | ${tableCell(point.evidence)} |`).join("\n");
   let reviewsAfter = baseReviews;
   if (rows) {
-    const lines = baseReviews.split(/\r?\n/);
-    const headerIndex = lines.findIndex((line) => /^\|\s*(?:知识点|主题)\s*\|/.test(line));
-    if (headerIndex < 0 || !/^\|\s*[-: |]+\|\s*$/.test(lines[headerIndex + 1] ?? "")) {
-      throw new ArchiveProposalError("复习计划缺少知识点或主题表格，无法安全插入复习项");
+    let location: ReturnType<typeof locateReviewTable>;
+    try {
+      location = locateReviewTable(baseReviews);
+    } catch (error) {
+      if (error instanceof ReviewUpdateConflict) throw new ArchiveProposalError("复习计划缺少知识点或主题表格，无法安全插入复习项");
+      throw error;
     }
+    const { lines, endIndex, eol } = location;
     const topics = diagnosis.weakPoints.slice(0, 5).map((point) => point.knowledgePoint.trim());
     let existingTopics: string[];
     try {
@@ -56,10 +60,12 @@ export function buildArchiveProposal(params: {
     if (new Set(topics).size !== topics.length || topics.some((topic) => existingTopics.includes(topic))) {
       throw new ArchiveProposalError("复习计划含重复知识点，无法安全插入复习项");
     }
-    let insertAt = headerIndex + 2;
-    while (insertAt < lines.length && /^\|.*\|\s*$/.test(lines[insertAt])) insertAt++;
-    lines.splice(insertAt, 0, ...rows.split("\n"));
-    reviewsAfter = lines.join("\n");
+    lines.splice(endIndex + 1, 0, ...rows.split("\n"));
+    reviewsAfter = lines.join(eol);
+    const verified = parseReviewsMarkdown(reviewsAfter, "reviews.md", today);
+    if (verified.warnings.length || topics.some((topic) => verified.items.filter((item) => item.topic === topic).length !== 1)) {
+      throw new ArchiveProposalError("复习计划写入结果无法正确读取");
+    }
   }
   const initialAverageScore = answers.length ? Math.round(answers.reduce((sum, item) => sum + item.score, 0) / answers.length) : 0;
   const singleLine = (value: string) => value.replace(/[\r\n]+/g, " ").trim();

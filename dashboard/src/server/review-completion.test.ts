@@ -46,6 +46,23 @@ describe("prepareReviewUpdate", () => {
     expect(() => prepareReviewUpdate(duplicate, params)).toThrow(ReviewUpdateConflict);
   });
 
+  it("detects duplicate rows when GFM omits the outer pipes", () => {
+    const duplicate = plan.replace("| 导数概念 |  | 2026-09-27 |  | 诊断发现弱点 |", "导数概念 |  | 2026-09-27 |  | 诊断发现弱点\n导数概念 | 2026-09-24 | 2026-10-01 | 3 | 手写复习");
+    expect(() => prepareReviewUpdate(duplicate, params)).toThrow(ReviewUpdateConflict);
+  });
+
+  it("updates the actual parsed table instead of a fenced example", () => {
+    const fenced = plan.replace("# 复习计划", "# 复习计划\n\n```md\n| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |\n| --- | --- | --- | --- | --- |\n| 导数概念 | | 2026-10-01 | | 示例 |\n```");
+    const updated = prepareReviewUpdate(fenced, params);
+    expect(updated).toContain("| 导数概念 | | 2026-10-01 | | 示例 |");
+    expect(parseReviewsMarkdown(updated, "reviews.md", params.date).items.find((item) => item.topic === "导数概念")).toMatchObject({ lastReviewed: params.date, nextReview: "2026-09-29" });
+  });
+
+  it("rejects a fenced example when no real table exists", () => {
+    const fenced = plan.replace(/\| 主题 \|[\s\S]*?\n\n备注：/, "```md\n| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |\n| --- | --- | --- | --- | --- |\n| 导数概念 | | 2026-10-01 | | 示例 |\n```\n\n备注：");
+    expect(() => prepareReviewUpdate(fenced, params)).toThrow(ReviewUpdateConflict);
+  });
+
   it("rejects malformed topic rows and malformed tables", () => {
     const shortRow = plan.replace("| 导数概念 |  | 2026-09-27 |  | 诊断发现弱点 |", "| 导数概念 | 2026-09-27 | 缺列 |");
     expect(() => prepareReviewUpdate(shortRow, params)).toThrow(ReviewUpdateConflict);
@@ -55,5 +72,19 @@ describe("prepareReviewUpdate", () => {
 
   it("rejects a review plan for another course", () => {
     expect(() => prepareReviewUpdate(plan.replace("courseId: calculus-101", "courseId: another-course"), params)).toThrow(ReviewUpdateConflict);
+  });
+
+  it("rejects malformed existing target dates or mastery", () => {
+    expect(() => prepareReviewUpdate(plan.replace("| 导数概念 |  | 2026-09-27 |  |", "| 导数概念 | bad | 2026-09-27 |  |"), params)).toThrow(ReviewUpdateConflict);
+    expect(() => prepareReviewUpdate(plan.replace("| 导数概念 |  | 2026-09-27 |  |", "| 导数概念 |  | 2026-09-27 | 11 |"), params)).toThrow(ReviewUpdateConflict);
+  });
+
+  it("rejects invalid raw YAML dates before parsing can normalize them", () => {
+    expect(() => prepareReviewUpdate(plan.replace("updated: 2026-09-26", "updated: 2026-02-30"), params)).toThrow(ReviewUpdateConflict);
+    expect(() => prepareReviewUpdate(plan.replace("updated: 2026-09-26", "updated: 2026-13-01"), params)).toThrow(ReviewUpdateConflict);
+  });
+
+  it("rejects a next date outside the supported YYYY-MM-DD range", () => {
+    expect(() => prepareReviewUpdate(null, { ...params, date: "9999-12-31" })).toThrow(ReviewUpdateConflict);
   });
 });

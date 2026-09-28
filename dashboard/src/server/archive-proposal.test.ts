@@ -37,4 +37,11 @@ describe("buildArchiveProposal", () => {
     const reviewsMarkdown = "---\ncourseId: c\nupdated: 2026-09-25\n---\n| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |\n| --- | --- | --- | --- | --- |\n| 导数 | 2026-09-24 | 2026-09-27 | 8 | 手工复述 |\n";
     expect(() => buildArchiveProposal({ courseRoot: "C:/tmp/c", assessmentId: "test", courseMarkdown, reviewsMarkdown, diagnosis: { courseId: "c", weakPoints: [{ knowledgePoint: "导数", evidence: "本次作答错误", severity: "high" }], remediationTasks: [], nextReviewDate: "2026-09-28", proposedChanges: { courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" } }, answers: [], today: "2026-09-25" })).toThrow(ArchiveProposalError);
   });
+
+  it("does not put diagnostic rows into a fenced table example", () => {
+    const courseMarkdown = "## 关键知识\n导数\n## 学习记录\n";
+    const reviewsMarkdown = "---\ncourseId: c\nupdated: 2026-09-25\n---\n```md\n| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |\n| --- | --- | --- | --- | --- |\n```\n\n| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |\n| --- | --- | --- | --- | --- |\n";
+    const files = buildArchiveProposal({ courseRoot: "C:/tmp/c", assessmentId: "test", courseMarkdown, reviewsMarkdown, diagnosis: { courseId: "c", weakPoints: [{ knowledgePoint: "导数", evidence: "本次作答错误", severity: "high" }], remediationTasks: [], nextReviewDate: "2026-09-28", proposedChanges: { courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" } }, answers: [], today: "2026-09-25" });
+    expect(parseReviewsMarkdown(files[1].after, "reviews.md", "2026-09-25").items.map((item) => item.topic)).toEqual(["导数"]);
+  });
 });
