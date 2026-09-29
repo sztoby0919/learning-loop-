@@ -19,14 +19,14 @@ const provider: AiProvider = {
 };
 const original = `---\ncourseId: calculus-101\nupdated: 2026-09-20\n---\n| 知识点 | 上次复习 | 下次复习 | 掌握度 1-10 | 复习证据 |\n| --- | --- | --- | ---: | --- |\n| 导数 | 2026-09-20 | 2026-09-21 | 5 | 手工计划不是作答证据 |\n`;
 
-async function setup() {
+async function setup(aiProvider: AiProvider = provider) {
   const root = await mkdtemp(path.join(tmpdir(), "review-practice-"));
   await mkdir(path.join(root, "sessions"));
   await writeFile(path.join(root, "course.md"), `---\nid: calculus-101\ntitle: 微积分\naccent: "#27624B"\nupdated: 2026-09-28\n---\n# 微积分\n## 课程概览\n学习导数。\n## 学习路线\n### 导数\n- [ ] 学习导数\n## 关键知识\n导数是瞬时变化率。\n## 易错点\n暂无。\n## 学习记录\n| 日期 | 学习内容 | 掌握度 1-10 | 遇到困难 | 下一步 |\n| --- | --- | ---: | --- | --- |\n| 2026-09-20 | 导数 | 5 | | |\n`);
   await writeFile(path.join(root, "reviews.md"), original);
   const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [{ id: "calculus-101", root, enabled: true }] }, () => "2026-09-28");
   let now = Date.parse("2026-09-28T09:00:00Z");
-  const manager = () => new PracticeManager(repository, new AiService({ provider, maxRetries: 0 }), () => "2026-09-28", "real", () => now++);
+  const manager = () => new PracticeManager(repository, new AiService({ provider: aiProvider, maxRetries: 0 }), () => "2026-09-28", "real", () => now++);
   const seed = async (name: string, date: string, selected: "A" | "B", mode: "real" | "mock" = "real", kind: "review-attempt" | "targeted-practice" = "review-attempt") => {
     await writeFile(path.join(root, "sessions", name), renderAttemptSession({ kind, courseId: "calculus-101", confirmedAt: date, mode, question: { ...question, selected, correct: "B" } }));
   };
@@ -99,7 +99,34 @@ it.each(["2026-09-27 # confirmed", "'2026-09-27' # confirmed", '"2026-09-27" # c
   const { root, seed, complete } = await setup();
   await seed("legacy.md", "2026-09-27", "B");
   const file = path.join(root, "sessions", "legacy.md");
-  await writeFile(file, (await readFile(file, "utf8")).replace("confirmedAt: 2026-09-27", `confirmedAt: ${scalar}`));
+  await writeFile(file, (await readFile(file, "utf8")).replace(/^questionOptions:.*\r?\n/m, "").replace("confirmedAt: 2026-09-27", `confirmedAt: ${scalar}`));
   expect(await readReviewStreak(root, "calculus-101", "导数", "2026-09-28")).toBe(1);
   expect(await complete("B")).toContain("| 导数 | 2026-09-28 | 2026-10-05 | 5 |");
+});
+
+it.each(["A", "B"] as const)("preserves correct %s answers and intervals when option text contains option separators", async (answer) => {
+  const trickyQuestion = { ...question, answer, options: ["x | B. y", '"quoted" | C. z', "\\path | D. w", "key: value # note"] };
+  const { root, complete } = await setup({ ...provider, async generateQuestions() { return [trickyQuestion]; } });
+  expect(await complete(answer)).toContain("| 导数 | 2026-09-28 | 2026-10-01 | 5 |");
+  expect(await readReviewStreak(root, "calculus-101", "导数", "2026-09-28")).toBe(1);
+  expect(await complete(answer)).toContain("| 导数 | 2026-09-28 | 2026-10-05 | 5 |");
+  expect(await complete(answer)).toContain("| 导数 | 2026-09-28 | 2026-10-28 | 5 |");
+});
+
+it("does not invent options for a legacy record with ambiguous delimiters", async () => {
+  const { root, complete } = await setup();
+  const legacy = renderAttemptSession({ kind: "review-attempt", courseId: "calculus-101", confirmedAt: "2026-09-27", mode: "real", question: { ...question, options: ["x | B. y", "瞬时变化", "面积", "体积"], selected: "B", correct: "B" } }).replace(/^questionOptions:.*\r?\n/m, "");
+  await writeFile(path.join(root, "sessions", "ambiguous-legacy.md"), legacy);
+  expect(await readReviewStreak(root, "calculus-101", "导数", "2026-09-28")).toBe(0);
+  expect(await complete("B")).toContain("| 导数 | 2026-09-28 | 2026-10-01 | 5 |");
+});
+
+it.each([{ options: null }, { options: ["only one option"] }, { options: 42 }])("rejects malformed structured options instead of falling back to display text: $options", async ({ options }) => {
+  const { root, seed, complete } = await setup();
+  await seed("malformed-options.md", "2026-09-27", "B");
+  const file = path.join(root, "sessions", "malformed-options.md");
+  const raw = (await readFile(file, "utf8")).replace(/^questionOptions:.*\r?\n/m, "");
+  await writeFile(file, raw.replace("mode: real\n", `mode: real\nquestionOptions: ${JSON.stringify(options)}\n`));
+  expect(await readReviewStreak(root, "calculus-101", "导数", "2026-09-28")).toBe(0);
+  expect(await complete("B")).toContain("| 导数 | 2026-09-28 | 2026-10-01 | 5 |");
 });

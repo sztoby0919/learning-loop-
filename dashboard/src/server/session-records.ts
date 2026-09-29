@@ -40,11 +40,22 @@ function confirmedReviewDate(raw: string, parsedValue: unknown): string | null {
   return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === date && dateText(parsedValue) === date ? date : null;
 }
 
-function hasCompleteCorrectAnswer(section: string): boolean {
+function hasCompleteCorrectAnswer(section: string, structuredOptions: unknown): boolean {
   const parseChoice = (value: string) => /^([A-D])\.\s*(.+)$/.exec(value);
-  const entries = field(section, "选项").split(/\s+\|\s+(?=[A-Z]\.)/).map(parseChoice);
-  if (entries.length !== 4 || entries.some((entry) => !entry)) return false;
-  const options = new Map(entries.map((entry) => [entry![1], entry![2].trim()]));
+  let options: Map<string, string>;
+  if (structuredOptions !== undefined) {
+    if (!Array.isArray(structuredOptions) || structuredOptions.length !== 4 || structuredOptions.some((option) => typeof option !== "string" || !option.trim())) return false;
+    options = new Map(structuredOptions.map((option: string, index) => [String.fromCharCode(65 + index), option]));
+    // The JSON array fixes option boundaries even if the visible text contains
+    // " | B. ". Keep the display consistent with this machine-readable evidence.
+    if (field(section, "选项") !== [...options].map(([letter, option]) => `${letter}. ${option}`).join(" | ")) return false;
+  } else {
+    // Older files have no structured options. Ambiguous delimiters must not be
+    // interpreted as proof of a correct answer.
+    const entries = field(section, "选项").split(/\s+\|\s+(?=[A-Z]\.)/).map(parseChoice);
+    if (entries.length !== 4 || entries.some((entry) => !entry)) return false;
+    options = new Map(entries.map((entry) => [entry![1], entry![2].trim()]));
+  }
   if (options.size !== 4 || [...options.values()].some((value) => !value)) return false;
   const normalized = [...options.values()].map((value) => value.normalize("NFKC").replace(/\s+/gu, " ").toLowerCase());
   if (new Set(normalized).size !== 4) return false;
@@ -63,7 +74,7 @@ export function renderAttemptSession(record: AttemptRecord): string {
   const { question, options, selected, correct, explanation, knowledgePoint } = record.question;
   const choice = (letter: "A" | "B" | "C" | "D") => `${letter}. ${oneLine(options[letter.charCodeAt(0) - 65])}`;
   const completed = record.completedAt ? `completedAt: ${new Date(record.completedAt).toISOString()}\n` : "";
-  return `---\nkind: ${record.kind}\ncourseId: ${record.courseId}\nupdated: ${record.confirmedAt}\nconfirmedAt: ${record.confirmedAt}\n${completed}mode: ${record.mode}\n---\n# ${record.kind === "targeted-practice" ? "定向练习" : "复习作答"}记录 ${record.confirmedAt}\n\n## 第 1 题\n\n问题：${oneLine(question)}\n\n选项：${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${oneLine(option)}`).join(" | ")}\n\n知识点：${oneLine(knowledgePoint)}\n\n选择：${choice(selected)}\n\n得分：${selected === correct ? 100 : 0}/100\n\n正确答案：${choice(correct)}\n\n解析：${oneLine(explanation)}\n`;
+  return `---\nkind: ${record.kind}\ncourseId: ${record.courseId}\nupdated: ${record.confirmedAt}\nconfirmedAt: ${record.confirmedAt}\n${completed}mode: ${record.mode}\nquestionOptions: ${JSON.stringify(options.map(oneLine))}\n---\n# ${record.kind === "targeted-practice" ? "定向练习" : "复习作答"}记录 ${record.confirmedAt}\n\n## 第 1 题\n\n问题：${oneLine(question)}\n\n选项：${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${oneLine(option)}`).join(" | ")}\n\n知识点：${oneLine(knowledgePoint)}\n\n选择：${choice(selected)}\n\n得分：${selected === correct ? 100 : 0}/100\n\n正确答案：${choice(correct)}\n\n解析：${oneLine(explanation)}\n`;
 }
 
 // Dates on a plan are not attempts. Only complete, confirmed real review records
@@ -90,7 +101,7 @@ export async function readReviewStreak(courseRoot: string, courseId: string, top
       const sections = questionSections(parsed.content);
       if (sections.length !== 1 || field(sections[0], "知识点") !== topic) continue;
       const section = sections[0];
-      const isCorrect = hasCompleteCorrectAnswer(section);
+      const isCorrect = hasCompleteCorrectAnswer(section, parsed.data.questionOptions);
       const timestamp = parsed.data.completedAt instanceof Date ? parsed.data.completedAt.getTime() : Date.parse(String(parsed.data.completedAt ?? ""));
       attempts.push({ date, time: Number.isFinite(timestamp) ? timestamp : null, correct: isCorrect });
     } catch {
