@@ -1,4 +1,4 @@
-import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, MistakeItem, NoteDocument, PracticeChoice, PracticeSessionConfirmed, PracticeSessionCreated, ResourceItem, ReviewItem, ScheduledReview, TaskReference } from "../shared/course.js";
+import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, MistakeItem, NoteDocument, PracticeChoice, PracticeSessionConfirmed, PracticeSessionCreated, ResourceItem, ReviewItem, ScheduledReview, SourceReference, TaskReference } from "../shared/course.js";
 import type { AnswerFeedback } from "../server/ai-types.js";
 import type { SettingsData } from "./pages/SettingsPage.js";
 
@@ -17,6 +17,10 @@ export function fetchCourses(signal?: AbortSignal): Promise<CoursesResponse> {
 
 export function fetchCourse(id: CourseId, signal?: AbortSignal): Promise<CourseDetail | CourseSummary> {
   return requestJson(`/api/courses/${id}`, signal);
+}
+
+export function fetchSourceReferences(id: CourseId, signal?: AbortSignal): Promise<SourceReference[]> {
+  return requestJson(`/api/courses/${encodeURIComponent(id)}/source-references`, signal);
 }
 
 export const fetchTasks = (signal?: AbortSignal) => requestJson<TaskReference[]>("/api/tasks", signal);

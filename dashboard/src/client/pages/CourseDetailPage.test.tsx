@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import type { CourseDetail } from "../../shared/course.js";
+import type { CourseDetail, SourceReference } from "../../shared/course.js";
 import { CourseDetailPage } from "./CourseDetailPage.js";
 
 const course: CourseDetail = {
@@ -48,5 +48,14 @@ describe("CourseDetailPage", () => {
     expect(screen.getByRole("table", { name: "学习记录" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "开始诊断" })).toHaveAttribute("href", "/courses/compiler-principles/coach");
     expect(screen.getByRole("link", { name: "查看错题本" })).toHaveAttribute("href", "/courses/compiler-principles/mistakes");
+  });
+
+  it("切换课程后不显示前一门课程的缓存来源", () => {
+    const staleReference: SourceReference = {
+      artifact: "course", headingIndex: 0, heading: "正则表达式", kind: "pdf-page", position: 1,
+      sourceUrl: "/api/courses/previous-course/source#page=1", verifiedExcerpt: null, aiDerived: false,
+    };
+    render(<MemoryRouter><CourseDetailPage course={course} sourceReferences={[staleReference]} /></MemoryRouter>);
+    expect(screen.queryByRole("link", { name: /打开原文件/ })).not.toBeInTheDocument();
   });
 });

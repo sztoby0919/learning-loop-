@@ -2,10 +2,11 @@ import { ArrowLeft, Check, Circle, Sparkle, WarningCircle } from "@phosphor-icon
 import type { CSSProperties } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import type { CourseDetail } from "../../shared/course.js";
+import type { CourseDetail, SourceReference } from "../../shared/course.js";
 import { MarkdownContent } from "../components/MarkdownContent.js";
+import { SourcedMarkdown } from "../components/SourceReference.js";
 
-export function CourseDetailPage({ course }: { course: CourseDetail }) {
+export function CourseDetailPage({ course, sourceReferences = [] }: { course: CourseDetail; sourceReferences?: SourceReference[] }) {
   const [searchParams] = useSearchParams();
   const justImported = searchParams.get("from") === "import";
   const style = { "--course-color": course.accent } as CSSProperties;
@@ -89,7 +90,7 @@ export function CourseDetailPage({ course }: { course: CourseDetail }) {
 
       <section className="detail-section" aria-labelledby="knowledge-heading">
         <div className="detail-section__heading"><h2 id="knowledge-heading">关键知识</h2></div>
-        <MarkdownContent>{course.keyPointsMarkdown}</MarkdownContent>
+        <SourcedMarkdown markdown={course.keyPointsMarkdown} artifact="course" references={sourceReferences.filter((reference) => reference.sourceUrl.split("#")[0] === `/api/courses/${encodeURIComponent(course.id)}/source`)} />
       </section>
 
       <section className="detail-section" aria-labelledby="mistakes-heading">

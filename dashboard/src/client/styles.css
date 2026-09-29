@@ -910,6 +910,12 @@ input:focus-visible {
 .notes-documents { display: grid; gap: 18px; }
 .notes-documents .workspace-panel { border-top: 3px solid var(--accent); }
 
+.source-reference { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 10px 0 18px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; padding: 9px 12px; color: var(--text-secondary); background: var(--surface-active); font-size: 12px; line-height: 1.6; }
+.source-reference__label { color: var(--ink); font-weight: 700; }
+.source-reference__pending { color: var(--warning); }
+.source-reference p { flex-basis: 100%; margin: 0; color: var(--ink-secondary); overflow-wrap: anywhere; }
+.source-reference a { margin-left: auto; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+
 .resource-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .resource-card { display: flex; min-height: 210px; flex-direction: column; padding: 18px; }
 .resource-card__meta { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; }
