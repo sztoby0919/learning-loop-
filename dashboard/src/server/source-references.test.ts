@@ -148,6 +148,51 @@ describe("trustworthy source reference HTTP API", () => {
     for (const reference of response.body) expect(reference.verifiedExcerpt).toBe("# Title ## Topic Source content");
   });
 
+  it.each(["##", "###"])("preserves an imported %s heading as source text, not generated structure", async (prefix) => {
+    const { app, repository, importFile } = await setup();
+    const course = await importFile(Buffer.from(`${prefix} Topic\nSource content here.`), "course.md");
+    expect((await repository.getNotes())[0].headings).toEqual(["Topic"]);
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body).toHaveLength(2);
+    for (const reference of response.body) expect(reference).toMatchObject({ heading: "Topic", headingIndex: 0, verifiedExcerpt: `${prefix} Topic Source content here.` });
+  });
+
+  it("keeps several Markdown knowledge points and verifies virtual position 2 independently", async () => {
+    const { app, repository, importFile } = await setup();
+    // 9 heading characters + 790 body characters + newline = one 800-char position.
+    const source = `## First\n${"a".repeat(790)}\n### Second\nSecond position source.`;
+    const course = await importFile(Buffer.from(source), "course.md");
+    expect((await repository.getNotes())[0].headings).toEqual(["First", "Second"]);
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body).toHaveLength(4);
+    for (const artifact of ["course", "notes"]) {
+      expect(response.body.filter((reference: { artifact: string }) => reference.artifact === artifact)).toMatchObject([
+        { heading: "First", headingIndex: 0, kind: "virtual-position", position: 1, verifiedExcerpt: `## First ${"a".repeat(491)}` },
+        { heading: "Second", headingIndex: 1, kind: "virtual-position", position: 2, verifiedExcerpt: "### Second Second position source." },
+      ]);
+    }
+    const notesPath = path.join(course.courseRoot, "notes.md");
+    await writeFile(notesPath, (await readFile(notesPath, "utf8")).replace("第 2 段文本", "第 1 段文本"));
+    const wrongPosition = await request(app).get(course.url).expect(200);
+    expect(wrongPosition.body.find((reference: { artifact: string; heading: string }) => reference.artifact === "notes" && reference.heading === "Second").verifiedExcerpt).toBeNull();
+  });
+
+  it.each(["\\# Literal", "\\\\# Literal", "## Topic with \\literal"])("round-trips existing source backslashes: %s", async (firstLine) => {
+    const { app, importFile } = await setup();
+    const course = await importFile(Buffer.from(`${firstLine}\nSource content here.`), "course.md");
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body).toHaveLength(2);
+    for (const reference of response.body) expect(reference.verifiedExcerpt).toBe(`${firstLine} Source content here.`);
+  });
+
+  it("does not decode legacy escaped text without explicit excerpt encoding metadata", async () => {
+    const { app, importFile } = await setup();
+    const course = await importFile(Buffer.from("## Topic\nSource content here."), "course.md");
+    await writeFile(path.join(course.courseRoot, "notes.md"), `---\ncourseId: ${course.courseId}\naiStatus: not-used\n---\n## Topic\n\n来源：原 文本文件 第 1 段文本。\n\n\\## Topic Source content here.\n`);
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body.find((reference: { artifact: string }) => reference.artifact === "notes").verifiedExcerpt).toBeNull();
+  });
+
   it("does not verify changed note text or a matching prefix with an invented suffix", async () => {
     const { app, importFile } = await setup();
     const source = "a".repeat(600);

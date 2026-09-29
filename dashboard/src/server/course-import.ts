@@ -25,6 +25,9 @@ const cleanLine = (value: string) => value.replace(/[\r\n]+/g, " ").replace(/\s+
 const heading = (value: string) => cleanLine(value).replace(/^#+\s*/, "").slice(0, 100);
 const tableCell = (value: string) => cleanLine(value).replace(/\|/g, "\\|");
 const yamlString = (value: string) => JSON.stringify(value);
+// Keep source headings inside a paragraph while preserving literal backslashes.
+// The matching frontmatter flag lets readers reverse this encoding, not guess.
+const excerptLine = (value: string) => cleanLine(value).replace(/\\/g, "\\\\").replace(/^#/, "\\#");
 const positionLabel = (format: ExtractedDocument["sourceFormat"], page: number) => format === "pdf" ? `第 ${page} 页` : `第 ${page} 段文本${format === "docx" ? "（估算位置）" : ""}`;
 
 export function createBasicDraft(source: ExtractedDocument, originalFilename: string): ImportDraft {
@@ -76,14 +79,14 @@ export function buildCourseFiles(draft: ImportDraft, courseId: string, today: st
     draft.aiStatus === "complete" ? `课程提纲经过 AI 辅助整理，请以原 ${sourceLabel} 核对。` : `课程提纲依据 ${sourceLabel} 目录生成，尚未经过 AI 完善。`,
   ].join("\n\n");
   const route = draft.stages.map((stage) => `### ${heading(stage.title)}\n${stage.tasks.map((task) => `- [ ] ${cleanLine(task)}`).join("\n")}`).join("\n\n");
-  const keyPoints = draft.notes.length
-    ? draft.notes.map((note) => `### ${heading(note.title)}\n\n来源：原 ${sourceLabel} ${positionLabel(draft.sourceFormat, note.page)}。\n\n${cleanLine(note.content)}`).join("\n\n")
+  const keyPoints = (depth: 2 | 3) => draft.notes.length
+    ? draft.notes.map((note) => `${"#".repeat(depth)} ${heading(note.title)}\n\n来源：原 ${sourceLabel} ${positionLabel(draft.sourceFormat, note.page)}。\n\n${excerptLine(note.content)}`).join("\n\n")
     : `暂无可靠的原文摘录，请阅读 ${sourceLabel} 后补充。`;
   const scheduleRows = (draft.deadlines ?? []).map((item) => `| ${item.date} | ${tableCell(item.type)} | ${tableCell(item.title)} | 全课程 | 计划中 | 原 ${sourceLabel} ${positionLabel(draft.sourceFormat, item.page)} |`).join("\n");
   const resourceType = draft.sourceFormat === "docx" ? "DOCX" : /\.html?$/i.test(draft.originalFilename) ? "HTML" : draft.sourceFormat === "text" ? "TEXT" : "PDF";
   return {
-    "course.md": `---\nid: ${courseId}\ntitle: ${yamlString(draft.title)}\nshortTitle: ${yamlString(draft.title.slice(0, 12))}\naccent: "#27624B"\nupdated: ${today}\norder: 999\narchived: false\naiStatus: ${draft.aiStatus}\n---\n\n# ${heading(draft.title)}\n\n## 课程概览\n\n${overview}\n\n## 学习路线\n\n${route}\n\n## 关键知识\n\n${keyPoints}\n\n## 易错点\n\n暂无个人易错点记录。\n\n## 学习记录\n\n| 日期 | 学习内容 | 掌握度 1-10 | 遇到困难 | 下一步 |\n| --- | --- | ---: | --- | --- |\n`,
-    "notes.md": `---\ncourseId: ${courseId}\nupdated: ${today}\naiStatus: ${draft.aiStatus}\n---\n\n# ${heading(draft.title)}笔记\n\n${keyPoints.replace(/^### /gm, "## ")}\n`,
+    "course.md": `---\nid: ${courseId}\ntitle: ${yamlString(draft.title)}\nshortTitle: ${yamlString(draft.title.slice(0, 12))}\naccent: "#27624B"\nupdated: ${today}\norder: 999\narchived: false\naiStatus: ${draft.aiStatus}\nsourceExcerptEncoding: escaped-line-v1\n---\n\n# ${heading(draft.title)}\n\n## 课程概览\n\n${overview}\n\n## 学习路线\n\n${route}\n\n## 关键知识\n\n${keyPoints(3)}\n\n## 易错点\n\n暂无个人易错点记录。\n\n## 学习记录\n\n| 日期 | 学习内容 | 掌握度 1-10 | 遇到困难 | 下一步 |\n| --- | --- | ---: | --- | --- |\n`,
+    "notes.md": `---\ncourseId: ${courseId}\nupdated: ${today}\naiStatus: ${draft.aiStatus}\nsourceExcerptEncoding: escaped-line-v1\n---\n\n# ${heading(draft.title)}笔记\n\n${keyPoints(2)}\n`,
     "reviews.md": `${frontmatter}\n# 复习计划\n\n| 知识点 | 上次复习 | 下次复习 | 掌握度 1-10 | 复习证据 |\n| --- | --- | --- | ---: | --- |\n`,
     "resources.md": `${frontmatter}\n# 学习资源\n\n| 名称 | 类型 | URL 或本地路径 | 对应阶段 | 使用状态 | 备注 |\n| --- | --- | --- | --- | --- | --- |\n| ${tableCell(draft.originalFilename)} | ${resourceType} | /api/courses/${courseId}/source | 全课程 | 使用中 | 原始导入文件 |\n`,
     "schedule.md": `${frontmatter}\n# 日程\n\n| 日期 | 类型 | 标题 | 对应阶段 | 状态 | 备注 |\n| --- | --- | --- | --- | --- | --- |\n${scheduleRows}${scheduleRows ? "\n" : ""}`,

@@ -81,12 +81,17 @@ function candidates(raw: string, artifact: "course" | "notes", extension: string
         break;
       }
     }
+    const body = parsed.content.slice(marker.position?.end.offset ?? end, end).trim();
+    // Reverse only the importer's explicitly versioned encoding. Preserve all
+    // original # characters and backslashes; legacy Markdown stays untouched.
+    const text = parsed.data.sourceExcerptEncoding === "escaped-line-v1"
+      ? body.replace(/^\\#/, "#").replace(/\\\\/g, "\\") : body;
     result.push({
       artifact, headingIndex, heading: textOf(node).trim(), position,
       // Missing/failed provenance is deliberately conservative: a failed
       // enrichment retry can leave notes from an earlier successful AI call.
       aiDerived: parsed.data.aiStatus !== "not-used",
-      text: normalize(parsed.content.slice(marker.position?.end.offset ?? end, end)),
+      text: normalize(text),
     });
     if (result.length >= 60) break;
   }
