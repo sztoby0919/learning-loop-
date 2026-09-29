@@ -61,7 +61,8 @@ export function PracticeFlow({ courseId, mistakeId, topic, onSaved }: PracticeFl
       setPhase("saved");
       onSaved();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(isReview && /冲突|修改/.test(message) ? `${message}。请刷新页面后重新开始复习。` : message);
       setPhase("feedback");
     }
   }

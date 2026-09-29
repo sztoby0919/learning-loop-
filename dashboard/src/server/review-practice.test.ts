@@ -6,7 +6,7 @@ import { expect, it } from "vitest";
 import { AiService } from "./ai-service.js";
 import type { AiProvider } from "./ai-provider.js";
 import { PracticeManager } from "./practice-manager.js";
-import { renderAttemptSession } from "./session-records.js";
+import { readReviewStreak, renderAttemptSession } from "./session-records.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 
 const question = { id: "q", question: "切线表示什么？", options: ["平均变化", "瞬时变化", "面积", "体积"], answer: "B", explanation: "导数是瞬时变化率。", knowledgePoint: "导数" };
@@ -67,4 +67,39 @@ it("allows automatic record topics and creates a missing plan only on confirmati
   await current.answer(created.sessionId, "q", "A");
   await current.confirm(created.sessionId);
   expect(await readFile(path.join(root, "reviews.md"), "utf8")).toContain("2026-09-29");
+});
+
+it.each(["2026-02-31", "2026-02-29"])("does not extend review intervals from the invalid raw confirmed date %s", async (date) => {
+  const { root, seed, complete } = await setup();
+  await seed("invalid-date.md", date, "B");
+  expect(await readReviewStreak(root, "calculus-101", "导数", "2026-09-28")).toBe(0);
+  expect(await complete("B")).toContain("| 导数 | 2026-09-28 | 2026-10-01 | 5 |");
+});
+
+it.each([
+  ["single option", "选项", "仅一个选项"],
+  ["missing option text", "选项", "A. 平均变化 | B. 瞬时变化 | C. 面积 | D. "],
+  ["duplicate choice label", "选项", "A. 平均变化 | B. 瞬时变化 | C. 面积 | C. 体积"],
+  ["duplicate option text", "选项", "A. 平均变化 | B. 瞬时变化 | C. 面积 | D. 面积"],
+  ["mismatched selected text", "选择", "B. 伪造选项"],
+  ["mismatched answer text", "正确答案", "B. 伪造选项"],
+  ["inconsistent score", "得分", "0/100"],
+  ["missing explanation", "解析", ""],
+])("does not extend intervals with %s in a saved review", async (_label, field, value) => {
+  const { root, seed, complete } = await setup();
+  await seed("incomplete.md", "2026-09-27", "B");
+  const file = path.join(root, "sessions", "incomplete.md");
+  const raw = await readFile(file, "utf8");
+  await writeFile(file, raw.replace(new RegExp(`^${field}：.*$`, "m"), `${field}：${value}`));
+  expect(await readReviewStreak(root, "calculus-101", "导数", "2026-09-28")).toBe(0);
+  expect(await complete("B")).toContain("| 导数 | 2026-09-28 | 2026-10-01 | 5 |");
+});
+
+it.each(["2026-09-27 # confirmed", "'2026-09-27' # confirmed", '"2026-09-27" # confirmed'])("keeps valid annotated legacy dates compatible: %s", async (scalar) => {
+  const { root, seed, complete } = await setup();
+  await seed("legacy.md", "2026-09-27", "B");
+  const file = path.join(root, "sessions", "legacy.md");
+  await writeFile(file, (await readFile(file, "utf8")).replace("confirmedAt: 2026-09-27", `confirmedAt: ${scalar}`));
+  expect(await readReviewStreak(root, "calculus-101", "导数", "2026-09-28")).toBe(1);
+  expect(await complete("B")).toContain("| 导数 | 2026-09-28 | 2026-10-05 | 5 |");
 });

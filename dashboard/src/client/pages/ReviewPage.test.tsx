@@ -45,6 +45,7 @@ it("shows a confirmation conflict while keeping feedback visible", async () => {
   await user.click(screen.getByRole("button", { name: "提交回答" }));
   await user.click(await screen.findByRole("button", { name: "确认保存并更新复习计划" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("文件冲突");
+  expect(screen.getByRole("alert")).toHaveTextContent("请刷新页面后重新开始复习");
   expect(screen.getByText("解析：解释")).toBeInTheDocument();
   expect(screen.queryByRole("radio")).not.toBeInTheDocument();
 });

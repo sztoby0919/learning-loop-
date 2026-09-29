@@ -35,6 +35,8 @@ for (const mode of ["real", "mock"] as const) {
     await expect(page.getByRole("cell", { name: mode === "real" ? next : today, exact: true })).toBeVisible();
     await page.goto("/calendar");
     if (advanced && next.slice(0, 7) !== today.slice(0, 7)) await page.getByRole("button", { name: "下个月" }).click();
-    await expect(page.getByText("复习：导数").first()).toBeVisible();
+    const expectedDate = mode === "real" ? next : today;
+    const calendarDay = page.locator(".calendar-day").filter({ has: page.locator(`time[datetime="${expectedDate}"]`) });
+    await expect(calendarDay.getByText("复习：导数", { exact: true })).toBeVisible();
   });
 }

@@ -25,6 +25,36 @@ export interface AttemptRecord {
 const oneLine = (value: string) => value.replace(/[\r\n]+/g, " ").trim();
 const dateText = (value: unknown) => value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? "").trim();
 
+function confirmedReviewDate(raw: string, parsedValue: unknown): string | null {
+  const lines = raw.split(/\r?\n/);
+  const metadataEnd = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+  if (lines[0].trim() !== "---" || metadataEnd < 0) return null;
+  const entries = lines.slice(1, metadataEnd).filter((line) => /^confirmedAt\s*:/.test(line));
+  if (entries.length !== 1) return null;
+  const scalar = /^confirmedAt\s*:\s*(?:"([^"]*)"|'([^']*)'|([^\s#]+))(?:\s+#.*)?\s*$/.exec(entries[0]);
+  const date = scalar?.[1] ?? scalar?.[2] ?? scalar?.[3] ?? "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const time = Date.parse(`${date}T00:00:00Z`);
+  // YAML normalizes bare invalid dates such as February 31. Validate the source
+  // scalar before accepting the parsed value as evidence of a completed review.
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === date && dateText(parsedValue) === date ? date : null;
+}
+
+function hasCompleteCorrectAnswer(section: string): boolean {
+  const parseChoice = (value: string) => /^([A-D])\.\s*(.+)$/.exec(value);
+  const entries = field(section, "选项").split(/\s+\|\s+(?=[A-Z]\.)/).map(parseChoice);
+  if (entries.length !== 4 || entries.some((entry) => !entry)) return false;
+  const options = new Map(entries.map((entry) => [entry![1], entry![2].trim()]));
+  if (options.size !== 4 || [...options.values()].some((value) => !value)) return false;
+  const normalized = [...options.values()].map((value) => value.normalize("NFKC").replace(/\s+/gu, " ").toLowerCase());
+  if (new Set(normalized).size !== 4) return false;
+  const selected = parseChoice(field(section, "选择"));
+  const correct = parseChoice(field(section, "正确答案"));
+  return Boolean(selected && correct && selected[1] === correct[1]
+    && options.get(selected[1]) === selected[2].trim() && options.get(correct[1]) === correct[2].trim()
+    && field(section, "问题") && field(section, "解析") && field(section, "得分") === "100/100");
+}
+
 export function renderAttemptSession(record: AttemptRecord): string {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(record.courseId)) throw new Error("courseId 非法");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(record.confirmedAt)) throw new Error("confirmedAt 必须为 YYYY-MM-DD");
@@ -52,18 +82,15 @@ export async function readReviewStreak(courseRoot: string, courseId: string, top
   const attempts: Array<{ date: string; time: number | null; correct: boolean }> = [];
   for (const file of files) {
     try {
-      const parsed = matter(await readFile(path.join(directory, file.name), "utf8"));
+      const raw = await readFile(path.join(directory, file.name), "utf8");
+      const parsed = matter(raw);
       if (parsed.data.kind !== "review-attempt" || parsed.data.mode !== "real" || parsed.data.courseId !== courseId) continue;
-      const date = dateText(parsed.data.confirmedAt);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date || date > today) continue;
+      const date = confirmedReviewDate(raw, parsed.data.confirmedAt);
+      if (!date || date > today) continue;
       const sections = questionSections(parsed.content);
       if (sections.length !== 1 || field(sections[0], "知识点") !== topic) continue;
       const section = sections[0];
-      const selected = /^([A-D])\.\s*\S/.exec(field(section, "选择"))?.[1];
-      const correct = /^([A-D])\.\s*\S/.exec(field(section, "正确答案"))?.[1];
-      const score = field(section, "得分");
-      const complete = selected && correct && field(section, "问题") && field(section, "解析") && field(section, "选项");
-      const isCorrect = Boolean(complete && selected === correct && score === "100/100");
+      const isCorrect = hasCompleteCorrectAnswer(section);
       const timestamp = parsed.data.completedAt instanceof Date ? parsed.data.completedAt.getTime() : Date.parse(String(parsed.data.completedAt ?? ""));
       attempts.push({ date, time: Number.isFinite(timestamp) ? timestamp : null, correct: isCorrect });
     } catch {
