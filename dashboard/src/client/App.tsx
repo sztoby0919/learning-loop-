@@ -65,7 +65,7 @@ function DashboardRoute() {
 function CourseRoute() {
   const id = useParams().id as CourseId;
   if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return <Navigate to="/" replace />;
-  return <KnownCourseRoute id={id} />;
+  return <KnownCourseRoute key={id} id={id} />;
 }
 
 function CourseCoachRoute() {
