@@ -1,5 +1,18 @@
 export type CourseId = string;
 
+export interface SourceReference {
+  artifact: "course" | "notes";
+  /** Zero-based h3 index within course key points, or h2 index within notes. */
+  headingIndex: number;
+  heading: string;
+  kind: "pdf-page" | "virtual-position";
+  position: number;
+  sourceUrl: string;
+  verifiedExcerpt: string | null;
+  /** Also true for legacy/unknown provenance: these references need checking. */
+  aiDerived: boolean;
+}
+
 export interface MistakeItem {
   id: string;
   courseId: CourseId;

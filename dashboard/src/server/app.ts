@@ -19,6 +19,7 @@ import { PdfImportError } from "./pdf-extractor.js";
 import { TextImportError } from "./text-extractor.js";
 import { readMistakes } from "./session-records.js";
 import { PracticeManager } from "./practice-manager.js";
+import { readSourceReferences, safeSourcePath } from "./source-references.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(currentDirectory, "../../dist");
@@ -64,6 +65,13 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     try { response.json(await readMistakes(configured.root, configured.id)); } catch (error) { next(error); }
   });
 
+  app.get("/api/courses/:id/source-references", async (request, response, next) => {
+    const id = request.params.id as string;
+    if (!repository.config.courses.some((course) => course.id === id)) { response.status(404).json({ error: "未知课程" }); return; }
+    try { response.json(imports ? await readSourceReferences(repository, imports, id) : []); }
+    catch (error) { next(error); }
+  });
+
   if (imports) {
     const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1 }, fileFilter: (_request, file, callback) => callback(null, /\.(pdf|docx|md|txt|markdown|html|htm)$/i.test(file.originalname)) });
     app.post("/api/course-imports", upload.single("file"), async (request, response, next) => {
@@ -88,7 +96,7 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
       try { await imports.cancel(request.params.id as string); response.status(204).end(); } catch (error) { next(error); }
     });
     app.get("/api/courses/:id/source", async (request, response, next) => {
-      const filePath = await imports.sourcePath(request.params.id as string);
+      const filePath = await safeSourcePath(repository, imports, request.params.id as string);
       if (!filePath) { response.status(404).json({ error: "未找到原始文件" }); return; }
       const contentType = filePath.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : /\.html?$/.test(filePath) ? "text/html; charset=utf-8" : /\.(md|markdown|txt)$/.test(filePath) ? "text/plain; charset=utf-8" : "application/pdf";
       response.setHeader("X-Content-Type-Options", "nosniff");
