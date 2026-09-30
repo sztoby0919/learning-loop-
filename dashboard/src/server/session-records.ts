@@ -4,13 +4,14 @@ import path from "node:path";
 
 import matter from "gray-matter";
 
-import type { MistakeItem } from "../shared/course.js";
+import type { MistakeItem, PracticeAttempt } from "../shared/course.js";
 
 export interface AttemptRecord {
   kind: "targeted-practice" | "review-attempt";
   courseId: string;
   confirmedAt: string;
   completedAt?: string;
+  mistakeId?: string;
   mode: "real" | "mock";
   question: {
     question: string;
@@ -74,7 +75,8 @@ export function renderAttemptSession(record: AttemptRecord): string {
   const { question, options, selected, correct, explanation, knowledgePoint } = record.question;
   const choice = (letter: "A" | "B" | "C" | "D") => `${letter}. ${oneLine(options[letter.charCodeAt(0) - 65])}`;
   const completed = record.completedAt ? `completedAt: ${new Date(record.completedAt).toISOString()}\n` : "";
-  return `---\nkind: ${record.kind}\ncourseId: ${record.courseId}\nupdated: ${record.confirmedAt}\nconfirmedAt: ${record.confirmedAt}\n${completed}mode: ${record.mode}\nquestionOptions: ${JSON.stringify(options.map(oneLine))}\n---\n# ${record.kind === "targeted-practice" ? "定向练习" : "复习作答"}记录 ${record.confirmedAt}\n\n## 第 1 题\n\n问题：${oneLine(question)}\n\n选项：${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${oneLine(option)}`).join(" | ")}\n\n知识点：${oneLine(knowledgePoint)}\n\n选择：${choice(selected)}\n\n得分：${selected === correct ? 100 : 0}/100\n\n正确答案：${choice(correct)}\n\n解析：${oneLine(explanation)}\n`;
+  const association = record.kind === "targeted-practice" && record.mistakeId ? `mistakeId: ${JSON.stringify(record.mistakeId)}\n` : "";
+  return `---\nkind: ${record.kind}\ncourseId: ${record.courseId}\nupdated: ${record.confirmedAt}\nconfirmedAt: ${record.confirmedAt}\n${completed}${association}mode: ${record.mode}\nquestionOptions: ${JSON.stringify(options.map(oneLine))}\n---\n# ${record.kind === "targeted-practice" ? "定向练习" : "复习作答"}记录 ${record.confirmedAt}\n\n## 第 1 题\n\n问题：${oneLine(question)}\n\n选项：${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${oneLine(option)}`).join(" | ")}\n\n知识点：${oneLine(knowledgePoint)}\n\n选择：${choice(selected)}\n\n得分：${selected === correct ? 100 : 0}/100\n\n正确答案：${choice(correct)}\n\n解析：${oneLine(explanation)}\n`;
 }
 
 // Dates on a plan are not attempts. Only complete, confirmed real review records
@@ -143,7 +145,9 @@ function questionSections(content: string): string[] {
   return sections;
 }
 
-function parseSession(raw: string, file: string, courseId: string): MistakeItem[] {
+interface SessionAnswer { attempt: PracticeAttempt; kind: string; mistakeId?: string }
+
+function parseSession(raw: string, file: string, courseId: string): SessionAnswer[] {
   const parsed = matter(raw);
   const data = parsed.data;
   if (!["ai-assessment", "targeted-practice", "review-attempt"].includes(String(data.kind ?? ""))) return [];
@@ -164,8 +168,7 @@ function parseSession(raw: string, file: string, courseId: string): MistakeItem[
     const selectedLetter = /^([A-D])\./.exec(selected)?.[1];
     const correctLetter = /^([A-D])\./.exec(correct)?.[1];
     const answeredCorrectly = selectedLetter && correctLetter ? selectedLetter === correctLetter : selected === correct;
-    if (answeredCorrectly || Number(score.split("/")[0]) === 100) return [];
-    return [{
+    return [{ kind: String(data.kind), mistakeId: typeof data.mistakeId === "string" ? data.mistakeId : undefined, attempt: {
       id: createHash("sha256").update(`${courseId}\0${file}\0${index}\0${question}`).digest("hex").slice(0, 20),
       courseId,
       question,
@@ -176,11 +179,12 @@ function parseSession(raw: string, file: string, courseId: string): MistakeItem[
       date,
       sourceSession: file,
       mode,
-    } satisfies MistakeItem];
+      isCorrect: Boolean(answeredCorrectly || Number(score.split("/")[0]) === 100),
+    } }];
   });
 }
 
-export async function readMistakes(courseRoot: string, courseId: string): Promise<{ items: MistakeItem[]; warnings: string[] }> {
+export async function readMistakes(courseRoot: string, courseId: string): Promise<{ items: MistakeItem[]; warnings: string[]; unassociatedAttempts?: PracticeAttempt[] }> {
   const directory = path.join(courseRoot, "sessions");
   let files;
   try {
@@ -192,11 +196,26 @@ export async function readMistakes(courseRoot: string, courseId: string): Promis
     throw error;
   }
   const items: MistakeItem[] = [];
+  const records: SessionAnswer[] = [];
+  const unassociatedAttempts: PracticeAttempt[] = [];
   const warnings: string[] = [];
   for (const file of files.sort((left, right) => left.name.localeCompare(right.name))) {
-    try { items.push(...parseSession(await readFile(path.join(directory, file.name), "utf8"), file.name, courseId)); }
+    try { records.push(...parseSession(await readFile(path.join(directory, file.name), "utf8"), file.name, courseId)); }
     catch (error) { warnings.push(`${file.name}: ${error instanceof Error ? error.message : String(error)}`); }
   }
+  for (const { attempt, kind, mistakeId } of records) {
+    if (!attempt.isCorrect && !(kind === "targeted-practice" && mistakeId)) {
+      const { isCorrect: _correct, ...item } = attempt;
+      items.push({ ...item, ...(kind === "targeted-practice" ? { unassociated: true } : {}) });
+    }
+  }
+  const originals = new Map(items.map((item) => [item.id, item]));
+  for (const { attempt, kind, mistakeId } of records) {
+    if (kind !== "targeted-practice") continue;
+    const original = mistakeId ? originals.get(mistakeId) : undefined;
+    if (original) (original.attempts ??= []).push(attempt);
+    else if (mistakeId || attempt.isCorrect) unassociatedAttempts.push(attempt);
+  }
   items.sort((left, right) => right.date.localeCompare(left.date) || left.sourceSession.localeCompare(right.sourceSession) || left.id.localeCompare(right.id));
-  return { items, warnings };
+  return { items, warnings, ...(unassociatedAttempts.length ? { unassociatedAttempts } : {}) };
 }

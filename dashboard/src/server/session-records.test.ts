@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { createApp } from "./app.js";
 import { buildArchiveProposal } from "./archive-proposal.js";
-import type { AiProvider } from "./ai-provider.js";
+import { MockAiProvider, type AiProvider } from "./ai-provider.js";
 import { AiService } from "./ai-service.js";
 import type { DiagnosisResult } from "./ai-types.js";
 import { CourseEventBus } from "./course-events.js";
@@ -32,6 +32,25 @@ function proposal(mode: "real" | "mock", answers = [wrongAnswer]) {
 }
 
 describe("diagnostic session records", () => {
+  it("runs actual Mock diagnosis through confirmation into a different targeted question", async () => {
+    const courseRoot = await courseDirectory();
+    const repository = new WorkspaceRepository({ configPath: path.join(path.dirname(courseRoot), "config.json"), courses: [{ id: "calculus-101", root: courseRoot, enabled: true }] }, () => "2026-09-28");
+    const provider = new MockAiProvider({ baseUrl: "", apiKey: "", model: "mock", maxTokens: 1000, temperature: 0 });
+    const app = createApp(repository, new CourseEventBus(), new AiService({ provider, maxRetries: 0 }), undefined, "mock");
+    const created = await request(app).post("/api/ai/assessments").send({ courseId: "calculus-101" }).expect(201);
+    let question = created.body.question;
+    for (let index = 0; index < created.body.total; index++) {
+      const answered = await request(app).post(`/api/ai/assessments/${created.body.assessmentId}/answers`).send({ questionId: question.id, answer: index === 0 ? "B" : String.fromCharCode(65 + index % 4) }).expect(200);
+      question = answered.body.nextQuestion;
+    }
+    await request(app).get(`/api/ai/assessments/${created.body.assessmentId}/proposal`).expect(200);
+    await request(app).post(`/api/ai/assessments/${created.body.assessmentId}/apply`).expect(200);
+    const mistakes = await request(app).get("/api/courses/calculus-101/mistakes").expect(200);
+    const original = mistakes.body.items[0];
+    const practice = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", kind: "targeted-practice", mistakeId: original.id }).expect(201);
+    expect(practice.body.question.question).not.toContain(original.question);
+    expect(practice.body).toMatchObject({ mode: "mock", question: { knowledgePoint: original.knowledgePoint } });
+  });
   it("records option choices, knowledge point and actual runtime mode without losing the old visible lines", () => {
     const session = proposal("real")[2].after;
     expect(session).toContain("mode: real");
@@ -77,6 +96,22 @@ describe("diagnostic session records", () => {
     const result = await readMistakes(courseRoot, "calculus-101");
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({ question: "极限是什么？", selected: "A. 函数值", correct: "B. 趋近值", mode: "real", knowledgePoint: "极限" });
+  });
+
+  it("keeps legacy and orphan attempts visible without guessing an original mistake", async () => {
+    const { readMistakes, renderAttemptSession } = await import("./session-records.js");
+    const courseRoot = await courseDirectory();
+    await writeFile(path.join(courseRoot, "sessions", "diagnosis.md"), proposal("real")[2].after);
+    const attempt = renderAttemptSession({ kind: "targeted-practice", courseId: "calculus-101", confirmedAt: "2026-09-28", mode: "mock", question: { question: wrongAnswer.question, options: wrongAnswer.options, selected: "B", correct: "B", explanation: wrongAnswer.explanation, knowledgePoint: "导数" } });
+    await writeFile(path.join(courseRoot, "sessions", "legacy.md"), attempt.replace("mode: mock\n", ""));
+    await writeFile(path.join(courseRoot, "sessions", "orphan.md"), attempt.replace("kind: targeted-practice", "kind: targeted-practice\nmistakeId: missing-original"));
+    const result = await readMistakes(courseRoot, "calculus-101");
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].attempts ?? []).toEqual([]);
+    expect(result.unassociatedAttempts).toEqual([
+      expect.objectContaining({ mode: "unknown", isCorrect: true, sourceSession: "legacy.md" }),
+      expect.objectContaining({ mode: "mock", isCorrect: true, sourceSession: "orphan.md" }),
+    ]);
   });
 
   it.each(["targeted-practice", "review-attempt"] as const)("does not index an unconfirmed %s even when updated is present", async (kind) => {

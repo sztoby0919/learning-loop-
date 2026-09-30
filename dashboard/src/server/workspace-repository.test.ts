@@ -54,6 +54,17 @@ async function makeWorkspace() {
 }
 
 describe("WorkspaceRepository", () => {
+  it("counts only explicitly real diagnoses in evidence and latest weak-point statistics", async () => {
+    const { root, courseRoot } = await makeWorkspace();
+    const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [{ id: "test-course", root: courseRoot, enabled: true }] }, () => "2026-09-30");
+    const session = (mode: string, score: number, weak: number) => `---\nkind: ai-assessment\ncourseId: test-course\n${mode ? `mode: ${mode}\n` : ""}initialAverageScore: ${score}\nfinalAverageScore: ${score}\nweakPointCount: ${weak}\n---\n`;
+    await writeFile(path.join(courseRoot, "sessions", "2026-09-29-mock.md"), session("mock", 100, 9));
+    await writeFile(path.join(courseRoot, "sessions", "2026-09-30-legacy.md"), session("", 100, 8));
+    expect(await repository.getStats()).toMatchObject({ diagnosisCount: 0, evidenceBasedMastery: null, diagnosisBeforeMastery: null, weakPointCount: 0 });
+    await writeFile(path.join(courseRoot, "sessions", "2026-09-27-real.md"), session("real", 40, 4));
+    await writeFile(path.join(courseRoot, "sessions", "2026-09-28-real.md"), session("real", 80, 2));
+    expect(await repository.getStats()).toMatchObject({ diagnosisCount: 2, evidenceBasedMastery: 6, diagnosisBeforeMastery: 6, weakPointCount: 2 });
+  });
   it("从配置课程生成全部聚合视图且不重复计算 session", async () => {
     const { root, courseRoot } = await makeWorkspace();
     const repository = new WorkspaceRepository({ configPath: path.join(root, "dashboard.config.json"), courses: [{ id: "test-course", root: courseRoot, enabled: true }] }, () => "2026-08-29");

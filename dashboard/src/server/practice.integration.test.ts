@@ -63,6 +63,29 @@ async function setup(aiProvider: AiProvider = provider, mode: "real" | "mock" = 
 }
 
 describe("targeted practice API", () => {
+  it("keeps all four real/mock correct/wrong attempts under the original mistake after restart", async () => {
+    const { courseRoot, repository, mistakeId } = await setup();
+    for (const mode of ["real", "mock"] as const) {
+      const app = createApp(new WorkspaceRepository(repository.config, () => "2026-09-28"), new CourseEventBus(), new AiService({ provider, maxRetries: 0 }), undefined, mode);
+      for (const choice of ["A", "B"]) {
+        const created = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" }).expect(201);
+        await request(app).post(`/api/practice-sessions/${created.body.sessionId}/answer`).send({ questionId: "q-new", choice }).expect(200);
+        await request(app).post(`/api/practice-sessions/${created.body.sessionId}/confirm`).expect(200);
+      }
+    }
+    const restarted = createApp(new WorkspaceRepository(repository.config, () => "2026-09-28"), new CourseEventBus());
+    const result = await request(restarted).get("/api/courses/calculus-101/mistakes").expect(200);
+    expect(result.body.items).toHaveLength(1);
+    expect(result.body.items[0].id).toBe(mistakeId);
+    expect(result.body.items[0].attempts).toHaveLength(4);
+    expect(result.body.items[0].attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ mode: "real", isCorrect: false }),
+      expect.objectContaining({ mode: "real", isCorrect: true }),
+      expect.objectContaining({ mode: "mock", isCorrect: false }),
+      expect.objectContaining({ mode: "mock", isCorrect: true }),
+    ]));
+    expect(await readdir(path.join(courseRoot, "sessions"))).toHaveLength(5);
+  });
   it("does not leak the answer before submission and returns 0/100 feedback exactly once", async () => {
     const { app, mistakeId } = await setup();
     const created = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" }).expect(201);
@@ -97,7 +120,8 @@ describe("targeted practice API", () => {
     expect(await readFile(path.join(courseRoot, "reviews.md"), "utf8")).toBe("手工复习计划\n");
     expect(await readFile(path.join(courseRoot, "course.md"), "utf8")).toBe(courseMarkdown);
     const mistakes = await request(app).get("/api/courses/calculus-101/mistakes").expect(200);
-    expect(mistakes.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ mode, question: expect.stringContaining("切线斜率") })]));
+    expect(mistakes.body.items).toHaveLength(1);
+    expect(mistakes.body.items[0].attempts).toEqual([expect.objectContaining({ mode, question: expect.stringContaining("切线斜率") })]);
   });
 
   it("rejects invalid requests and missing sessions with suitable status codes", async () => {

@@ -10,10 +10,10 @@ test("a confirmed wrong diagnosis becomes a saved targeted attempt after refresh
   };
   const saved = {
     ...original, id: "mistake-2", question: "切线斜率表示什么？", selected: "A. 平均变化",
-    correct: "B. 瞬时变化", explanation: "切线斜率对应瞬时变化率。", sourceSession: "saved.md",
+    correct: "B. 瞬时变化", explanation: "切线斜率对应瞬时变化率。", sourceSession: "saved.md", isCorrect: false,
   };
   await page.route("**/api/courses/calculus-101/mistakes", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [...(diagnosisConfirmed ? [original] : []), ...(practiceConfirmed ? [saved] : [])], warnings: [] }) });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: diagnosisConfirmed ? [{ ...original, attempts: practiceConfirmed ? [saved] : [] }] : [], warnings: [] }) });
   });
   await page.route("**/api/ai/**", async (route) => {
     const url = route.request().url();
@@ -53,6 +53,10 @@ test("a confirmed wrong diagnosis becomes a saved targeted attempt after refresh
   await page.getByRole("button", { name: "确认保存练习" }).click();
   await expect(page.getByText(/Mock.*演示.*已保存/)).toBeVisible();
   await page.reload();
-  await expect(page.getByText("切线斜率表示什么？")).toBeVisible();
+  const history = page.getByRole("region", { name: "再练历史" });
+  await expect(history.getByText("切线斜率表示什么？")).toBeVisible();
+  await expect(history).toContainText("答错");
+  await expect(history).toContainText("Mock");
+  await expect(page.getByRole("button", { name: "针对这道错题再练" })).toHaveCount(1);
   await expect(page.getByText(/已掌握/)).toHaveCount(0);
 });

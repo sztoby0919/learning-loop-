@@ -24,6 +24,12 @@ export interface MistakeItem {
   date: string;
   sourceSession: string;
   mode: "real" | "mock" | "unknown";
+  attempts?: PracticeAttempt[];
+  unassociated?: boolean;
+}
+
+export interface PracticeAttempt extends Omit<MistakeItem, "attempts" | "unassociated"> {
+  isCorrect: boolean;
 }
 
 export type PracticeChoice = "A" | "B" | "C" | "D";

@@ -32,7 +32,7 @@ export const fetchCalendar = (month: string, signal?: AbortSignal) => requestJso
 export const fetchStats = (signal?: AbortSignal) => requestJson<LearningStats>("/api/stats", signal);
 export const fetchSettings = (signal?: AbortSignal) => requestJson<SettingsData>("/api/settings", signal);
 
-export function fetchMistakes(id: CourseId, signal?: AbortSignal): Promise<{ items: MistakeItem[]; warnings: string[] }> {
+export function fetchMistakes(id: CourseId, signal?: AbortSignal): Promise<{ items: MistakeItem[]; warnings: string[]; unassociatedAttempts?: import("../shared/course.js").PracticeAttempt[] }> {
   return requestJson(`/api/courses/${id}/mistakes`, signal);
 }
 

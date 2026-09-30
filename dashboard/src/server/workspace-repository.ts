@@ -217,7 +217,7 @@ export class WorkspaceRepository {
           const initial = Number(data.initialAverageScore);
           const final = Number(data.finalAverageScore);
           const weak = Number(data.weakPointCount);
-          if (data.kind !== "ai-assessment" || data.courseId !== configured.id || ![initial, final, weak].every(Number.isFinite)) return null;
+          if (data.kind !== "ai-assessment" || data.mode !== "real" || data.courseId !== configured.id || ![initial, final, weak].every(Number.isFinite)) return null;
           return { courseId: configured.id, file, initial, final, weak };
         } catch { return null; }
       }))).filter((item): item is { courseId: string; file: string; initial: number; final: number; weak: number } => item !== null);

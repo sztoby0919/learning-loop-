@@ -32,10 +32,16 @@ describe("buildArchiveProposal", () => {
     expect(files[1].after).toContain("备注：保留这段说明。");
   });
 
-  it("rejects a diagnosis topic already present in the manual plan", () => {
+  it("preserves a unique existing topic and still archives a later diagnosis", () => {
     const courseMarkdown = "## 关键知识\n导数\n## 学习记录\n";
     const reviewsMarkdown = "---\ncourseId: c\nupdated: 2026-09-25\n---\n| 主题 | 上次复习 | 下次复习 | 掌握度 | 证据 |\n| --- | --- | --- | --- | --- |\n| 导数 | 2026-09-24 | 2026-09-27 | 8 | 手工复述 |\n";
-    expect(() => buildArchiveProposal({ courseRoot: "C:/tmp/c", assessmentId: "test", courseMarkdown, reviewsMarkdown, diagnosis: { courseId: "c", weakPoints: [{ knowledgePoint: "导数", evidence: "本次作答错误", severity: "high" }], remediationTasks: [], nextReviewDate: "2026-09-28", proposedChanges: { courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" } }, answers: [], today: "2026-09-25" })).toThrow(ArchiveProposalError);
+    const params = { courseRoot: "C:/tmp/c", assessmentId: "test", courseMarkdown, reviewsMarkdown, diagnosis: { courseId: "c", weakPoints: [{ knowledgePoint: "导数", evidence: "本次作答错误", severity: "high" as const }], remediationTasks: [], nextReviewDate: "2026-09-28", proposedChanges: { courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" } }, answers: [{ question: "导数？", answer: "A. 平均", score: 0, gap: "", correctAnswer: "B. 瞬时", explanation: "瞬时变化率" }], today: "2026-09-25" };
+    const files = buildArchiveProposal(params);
+    expect(files[1].after).toBe(reviewsMarkdown);
+    expect(files[2].after).toContain("问题：导数？");
+    expect(files[2].after).toContain("得分：0/100");
+    expect(() => buildArchiveProposal({ ...params, reviewsMarkdown: reviewsMarkdown + "| 导数 | | | | 重复行 |\n" })).toThrow(ArchiveProposalError);
+    expect(() => buildArchiveProposal({ ...params, reviewsMarkdown: reviewsMarkdown.replace("2026-09-27", "无效日期") })).toThrow(ArchiveProposalError);
   });
 
   it("does not put diagnostic rows into a fenced table example", () => {

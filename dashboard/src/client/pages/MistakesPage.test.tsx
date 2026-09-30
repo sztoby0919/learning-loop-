@@ -30,6 +30,23 @@ function response(body: unknown, status = 200) {
 afterEach(() => { vi.unstubAllGlobals(); FakeEventSource.instances = []; });
 
 describe("MistakesPage", () => {
+  it("renders persisted real/mock correct/wrong history after remount", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const attempts = ["real", "mock"].flatMap((mode) => [true, false].map((isCorrect) => ({ ...mistake, id: `${mode}-${isCorrect}`, question: `再练 ${mode}-${isCorrect}`, mode, isCorrect })));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("/mistakes")
+      ? response({ items: [{ ...mistake, attempts }], warnings: [] })
+      : response({ courses: [], recentRecords: [], warningCount: 0 })));
+    const first = render(<MemoryRouter><MistakesPage courseId="calculus-101" /></MemoryRouter>);
+    expect(await screen.findByRole("region", { name: "再练历史" })).toBeInTheDocument();
+    first.unmount();
+    render(<MemoryRouter><MistakesPage courseId="calculus-101" /></MemoryRouter>);
+    const history = await screen.findByRole("region", { name: "再练历史" });
+    expect(within(history).getAllByText(/答对/)).toHaveLength(2);
+    expect(within(history).getAllByText(/答错/)).toHaveLength(2);
+    expect(within(history).getAllByText(/真实作答/)).toHaveLength(2);
+    expect(within(history).getAllByText(/Mock.*演示/)).toHaveLength(2);
+    for (const attempt of attempts) expect(within(history).getByText(attempt.question)).toBeInTheDocument();
+  });
   it("shows confirmed course mistakes and refreshes the list when that course changes", async () => {
     let items = [mistake];
     vi.stubGlobal("EventSource", FakeEventSource);

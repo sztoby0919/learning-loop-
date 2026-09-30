@@ -59,14 +59,14 @@ const provider: AiProvider = {
   async generateRemediationTasks() { return []; },
 };
 
-async function setup(aiProvider: AiProvider = provider) {
+async function setup(aiProvider: AiProvider = provider, mode: "real" | "mock" = "mock") {
   const root = await mkdtemp(path.join(tmpdir(), "learning-loop-assessment-"));
   const courseRoot = path.join(root, "calculus-101");
   await mkdir(courseRoot);
   await writeFile(path.join(courseRoot, "course.md"), courseMarkdown);
   await writeFile(path.join(courseRoot, "reviews.md"), reviewsMarkdown);
   const repository = new WorkspaceRepository({ configPath: path.join(root, "dashboard.config.json"), courses: [{ id: "calculus-101", root: courseRoot, enabled: true }] }, () => "2026-09-25");
-  return { app: createApp(repository, new CourseEventBus(), new AiService({ provider: aiProvider, maxRetries: 0 })), courseRoot };
+  return { app: createApp(repository, new CourseEventBus(), new AiService({ provider: aiProvider, maxRetries: 0 }), undefined, mode), courseRoot };
 }
 
 async function startAndAnswer(app: Awaited<ReturnType<typeof setup>>["app"]) {
@@ -150,12 +150,27 @@ describe("AI assessment API", () => {
   });
 
   it("derives evidence-based stats from a confirmed assessment session", async () => {
-    const { app } = await setup();
+    const { app } = await setup(provider, "real");
     const { assessmentId } = await startAndAnswer(app);
     await request(app).get(`/api/ai/assessments/${assessmentId}/proposal`);
     await request(app).post(`/api/ai/assessments/${assessmentId}/apply`).send({});
     const stats = await request(app).get("/api/stats");
     expect(stats.body).toMatchObject({ diagnosisCount: 1, evidenceBasedMastery: 0, diagnosisBeforeMastery: 0, weakPointCount: 1 });
+  });
+
+  it("archives later diagnoses without duplicating or overwriting an existing review topic", async () => {
+    const { app, courseRoot } = await setup();
+    for (let index = 0; index < 2; index++) {
+      const { assessmentId } = await startAndAnswer(app);
+      await request(app).get(`/api/ai/assessments/${assessmentId}/proposal`).expect(200);
+      await request(app).post(`/api/ai/assessments/${assessmentId}/apply`).expect(200);
+    }
+    const reviews = await readFile(path.join(courseRoot, "reviews.md"), "utf8");
+    expect(reviews.match(/\| 导数 \|/g)).toHaveLength(1);
+    const mistakes = await request(app).get("/api/courses/calculus-101/mistakes").expect(200);
+    expect(mistakes.body.items).toHaveLength(2);
+    expect(mistakes.body.items[0].id).not.toBe(mistakes.body.items[1].id);
+    expect((await request(app).get("/api/stats")).body).toMatchObject({ diagnosisCount: 0, evidenceBasedMastery: null, weakPointCount: 0 });
   });
 
   it("rejects a model diagnosis for another course before creating a proposal", async () => {

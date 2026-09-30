@@ -2,14 +2,26 @@ import { ArrowLeft } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import type { CourseId, MistakeItem } from "../../shared/course.js";
+import type { CourseId, MistakeItem, PracticeAttempt } from "../../shared/course.js";
 import { fetchMistakes } from "../api.js";
 import { AppShell } from "../components/AppShell.js";
 import { PracticeFlow } from "../components/PracticeFlow.js";
 
+function AttemptHistory({ attempts, label = "再练历史" }: { attempts: PracticeAttempt[]; label?: string }) {
+  return <section aria-label={label}>
+    <h3>{label}</h3>
+    <ol>{attempts.map((attempt) => <li key={attempt.id}>
+      <p><time dateTime={attempt.date}>{attempt.date}</time> · {attempt.isCorrect ? "答对" : "答错"} · {attempt.mode === "real" ? "真实作答" : attempt.mode === "mock" ? "Mock · 离线演示，不代表真实掌握" : "来源模式未知"}</p>
+      <h4>{attempt.question}</h4>
+      <p>你的选择：{attempt.selected}</p><p>正确答案：{attempt.correct}</p><p>解析：{attempt.explanation}</p>
+    </li>)}</ol>
+  </section>;
+}
+
 export function MistakesPage({ courseId }: { courseId: CourseId }) {
   const [items, setItems] = useState<MistakeItem[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [unassociatedAttempts, setUnassociatedAttempts] = useState<PracticeAttempt[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loadedCourseId, setLoadedCourseId] = useState(courseId);
@@ -29,6 +41,7 @@ export function MistakesPage({ courseId }: { courseId: CourseId }) {
       const result = await fetchMistakes(courseId, controller.signal);
       if (!isCurrent()) return;
       setItems(result.items);
+      setUnassociatedAttempts(result.unassociatedAttempts ?? []);
       setWarnings(result.warnings);
       setError("");
     } catch (cause) {
@@ -79,14 +92,18 @@ export function MistakesPage({ courseId }: { courseId: CourseId }) {
           <ol className="mistakes-list">
             {items.map((item) => <li className="mistake-card" key={item.id}>
               <div className="mistake-card__meta"><time dateTime={item.date}>{item.date}</time><span>{item.knowledgePoint ?? "未标注知识点"}</span>{item.mode === "mock" && <span className="practice-mode">Mock · 演示记录，不代表真实掌握</span>}</div>
+              {item.mode === "unknown" && <p>来源模式未知</p>}
+              {item.unassociated && <p>历史再练：来源未关联</p>}
               <h2>{item.question}</h2>
               <p>你的选择：{item.selected}</p>
               <p>正确答案：{item.correct}</p>
               <p>解析：{item.explanation}</p>
+              {Boolean(item.attempts?.length) && <AttemptHistory attempts={item.attempts!} />}
               <PracticeFlow courseId={courseId} mistakeId={item.id} onSaved={() => void load()} />
             </li>)}
           </ol>
         )}
+        {unassociatedAttempts.length > 0 && <AttemptHistory attempts={unassociatedAttempts} label="历史再练：来源未关联" />}
       </>}
     </div>
   </AppShell>;

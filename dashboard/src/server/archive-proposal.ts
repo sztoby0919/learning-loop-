@@ -37,9 +37,9 @@ export function buildArchiveProposal(params: {
   if (courseAfter === courseMarkdown && (tasks || mistakes)) throw new ArchiveProposalError("课程档案缺少必要章节，无法生成安全修改");
 
   const baseReviews = params.reviewsMarkdown ?? `---\ncourseId: ${diagnosis.courseId}\nupdated: ${today}\n---\n# 复习计划\n\n| 知识点 | 上次复习 | 下次复习 | 掌握度 1-10 | 复习证据 |\n| --- | --- | --- | ---: | --- |\n`;
-  const rows = diagnosis.weakPoints.slice(0, 5).map((point) => `| ${tableCell(point.knowledgePoint)} |  | ${diagnosis.nextReviewDate} |  | ${tableCell(point.evidence)} |`).join("\n");
+  const points = diagnosis.weakPoints.slice(0, 5);
   let reviewsAfter = baseReviews;
-  if (rows) {
+  if (points.length) {
     let location: ReturnType<typeof locateReviewTable>;
     try {
       location = locateReviewTable(baseReviews);
@@ -57,10 +57,12 @@ export function buildArchiveProposal(params: {
     } catch {
       throw new ArchiveProposalError("复习计划格式无效，无法安全插入复习项");
     }
-    if (new Set(topics).size !== topics.length || topics.some((topic) => existingTopics.includes(topic))) {
+    if (new Set(topics).size !== topics.length || new Set(existingTopics).size !== existingTopics.length) {
       throw new ArchiveProposalError("复习计划含重复知识点，无法安全插入复习项");
     }
-    lines.splice(endIndex + 1, 0, ...rows.split("\n"));
+    const rows = points.filter((point) => !existingTopics.includes(point.knowledgePoint.trim()))
+      .map((point) => `| ${tableCell(point.knowledgePoint)} |  | ${diagnosis.nextReviewDate} |  | ${tableCell(point.evidence)} |`);
+    lines.splice(endIndex + 1, 0, ...rows);
     reviewsAfter = lines.join(eol);
     const verified = parseReviewsMarkdown(reviewsAfter, "reviews.md", today);
     if (verified.warnings.length || topics.some((topic) => verified.items.filter((item) => item.topic === topic).length !== 1)) {

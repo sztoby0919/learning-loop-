@@ -53,6 +53,7 @@ interface PracticeSession {
   confirmed: boolean;
   confirming: boolean;
   kind: "targeted-practice" | "review-attempt";
+  mistakeId?: string;
   review?: { topic: string; raw: string | null; hash: string | null };
 }
 
@@ -137,7 +138,7 @@ export class PracticeManager {
       ? { ...generated[0], question: `【离线演示】${generated[0].question}` }
       : generated[0];
     const id = randomUUID();
-    this.sessions.set(id, { id, courseId: params.courseId, question, createdAt: this.now(), confirmed: false, confirming: false, kind: params.kind, review });
+    this.sessions.set(id, { id, courseId: params.courseId, question, createdAt: this.now(), confirmed: false, confirming: false, kind: params.kind, review, mistakeId: params.kind === "targeted-practice" ? params.mistakeId : undefined });
     return { sessionId: id, question: publicQuestion(question), mode: this.mode };
   }
 
@@ -194,6 +195,7 @@ export class PracticeManager {
       const filePath = path.join(directory, fileName);
       const content = renderAttemptSession({
         kind: session.kind, courseId: session.courseId, confirmedAt, mode: this.mode,
+        mistakeId: session.mistakeId,
         ...(session.review ? { completedAt: new Date(this.now()).toISOString() } : {}),
         question: {
           question: session.question.question, options: session.question.options,

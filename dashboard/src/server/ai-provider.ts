@@ -83,6 +83,7 @@ export class MockAiProvider implements AiProvider {
     await this.delay(300);
 
     const reference = params.context.includes("瞬时变化率") ? "瞬时变化率" : params.topic;
+    const targeted = params.context.includes("原错题：");
     const questions: AssessmentQuestion[] = Array.from({ length: params.count }, (_, i) => {
       const correctIndex = i % 4;
       const options = [
@@ -94,7 +95,9 @@ export class MockAiProvider implements AiProvider {
       options[correctIndex] = reference;
       return {
         id: `q-${params.courseId}-${Date.now()}-${i}`,
-        question: `关于${params.topic}，哪一项最符合课程内容？（第 ${i + 1} 题，离线演示）`,
+        question: targeted
+          ? `复习${params.topic}时，以下哪种表述可用于纠正上次的理解？（离线演示）`
+          : `关于${params.topic}，哪一项最符合课程内容？（第 ${i + 1} 题，离线演示）`,
         options,
         answer: String.fromCharCode(65 + correctIndex),
         explanation: `课程内容指出：${reference}。其他选项不符合这一表述。`,

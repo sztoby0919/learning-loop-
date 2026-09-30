@@ -194,7 +194,9 @@ describe("PracticeManager targeted practice", () => {
     expect(content).toContain("得分：0/100");
     expect(content).toContain("选择：A. 平均变化率");
     if (mode === "mock") expect(content).toContain("离线演示");
-    expect((await readMistakes(courseRoot, "calculus-101")).items).toEqual(expect.arrayContaining([expect.objectContaining({ mode, selected: "A. 平均变化率" })]));
+    const saved = await readMistakes(courseRoot, "calculus-101");
+    expect(saved.items).toHaveLength(1);
+    expect(saved.items[0]).toMatchObject({ id: mistakeId, attempts: [expect.objectContaining({ mode, selected: "A. 平均变化率", sourceSession: fresh[0] })] });
     expect(await readFile(path.join(courseRoot, "course.md"), "utf8")).toBe(courseMarkdown);
     expect(await readFile(path.join(courseRoot, "reviews.md"), "utf8")).toBe("手工复习计划\n");
     await expect(manager.confirm(created.sessionId)).rejects.toMatchObject({ status: 409 });
