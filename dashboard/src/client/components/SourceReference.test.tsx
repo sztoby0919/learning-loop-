@@ -24,10 +24,11 @@ describe("SourceReference", () => {
     expect(screen.getByRole("link", { name: "打开原文件：极限" })).toHaveAttribute("href", "/api/courses/limits/source");
   });
 
-  it("AI 内容即使携带摘录字段也标待核对且不称原文摘录", () => {
+  it("AI 内容不显示待核对标识，也不冒充已核验原文", () => {
     render(<SourceReference reference={{ ...pdf, aiDerived: true }} />);
-    expect(screen.getByText("待核对")).toBeInTheDocument();
+    expect(screen.queryByText("待核对")).not.toBeInTheDocument();
     expect(screen.queryByText(/原文摘录/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "打开原文件：极限" })).toBeInTheDocument();
   });
 
   it("只在对应标题下显示引用，手工课程没有来源动作", () => {

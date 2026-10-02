@@ -152,6 +152,8 @@ function parseSession(raw: string, file: string, courseId: string): SessionAnswe
   const data = parsed.data;
   if (!["ai-assessment", "targeted-practice", "review-attempt"].includes(String(data.kind ?? ""))) return [];
   if (data.courseId !== courseId) throw new Error("courseId 与课程配置不一致");
+  const evidenceCourseId = data.evidenceCourseId ?? courseId;
+  if (typeof evidenceCourseId !== "string" || !/^[a-z0-9][a-z0-9-]{0,99}$/.test(evidenceCourseId)) throw new Error("证据课程 ID 无效");
   const date = dateText(data.confirmedAt ?? (data.kind === "ai-assessment" ? data.updated : undefined));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("缺少有效日期");
   const mode = data.mode === undefined ? "unknown" : data.mode;
@@ -169,7 +171,7 @@ function parseSession(raw: string, file: string, courseId: string): SessionAnswe
     const correctLetter = /^([A-D])\./.exec(correct)?.[1];
     const answeredCorrectly = selectedLetter && correctLetter ? selectedLetter === correctLetter : selected === correct;
     return [{ kind: String(data.kind), mistakeId: typeof data.mistakeId === "string" ? data.mistakeId : undefined, attempt: {
-      id: createHash("sha256").update(`${courseId}\0${file}\0${index}\0${question}`).digest("hex").slice(0, 20),
+      id: createHash("sha256").update(`${evidenceCourseId}\0${file}\0${index}\0${question}`).digest("hex").slice(0, 20),
       courseId,
       question,
       selected,
@@ -182,6 +184,12 @@ function parseSession(raw: string, file: string, courseId: string): SessionAnswe
       isCorrect: Boolean(answeredCorrectly || Number(score.split("/")[0]) === 100),
     } }];
   });
+}
+
+export function validateSessionMarkdown(raw: string, file: string, courseId: string): void {
+  const data = matter(raw).data;
+  if (data.courseId !== undefined && data.courseId !== courseId) throw new Error("session courseId 与课程不一致");
+  parseSession(raw, file, courseId);
 }
 
 export async function readMistakes(courseRoot: string, courseId: string): Promise<{ items: MistakeItem[]; warnings: string[]; unassociatedAttempts?: PracticeAttempt[] }> {

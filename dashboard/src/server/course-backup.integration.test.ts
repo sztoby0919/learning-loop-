@@ -1,0 +1,44 @@
+// @vitest-environment node
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import request from "supertest";
+import { afterEach, expect, it } from "vitest";
+import { createApp } from "./app.js";
+import { CourseImportManager } from "./course-import-manager.js";
+import { CourseEventBus } from "./course-events.js";
+import { WorkspaceRepository } from "./workspace-repository.js";
+import { CourseRestoreManager } from "./course-restore.js";
+import { BackupZipCodec } from "./backup-zip.js";
+const roots: string[] = []; const managers: CourseImportManager[] = [];
+afterEach(async () => { managers.splice(0).forEach((manager) => manager.stopScheduledCleanup()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+it("downloads a ZIP only for selected courses while existing JSON remains unchanged", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-backup-http-")); roots.push(root);
+  const today = () => "2026-10-02"; const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, today); const events = new CourseEventBus();
+  const imports = new CourseImportManager({ root, repository, events, today, watchCourse: () => {} }); managers.push(imports);
+  const draft = await imports.create(new TextEncoder().encode("# 教材\n\n## 章节\n正文"), "book.md"); const { courseId } = await imports.confirm(draft.id, draft.revision);
+  const restores = new CourseRestoreManager({ root, repository, events, codec: new BackupZipCodec(), watchCourse: () => {} });
+  const app = createApp(repository, events, undefined, imports, "mock", restores);
+  const oldJson = (await request(app).get("/api/export").expect(200)).body;
+  const manifest = await request(app).get(`/api/backups/preview?courseId=${courseId}`).expect(200);
+  expect(manifest.body.courses).toHaveLength(1); expect(manifest.body.courses[0].sourceIncluded).toBe(true);
+  const zip = await request(app).get(`/api/backups?courseId=${courseId}`).buffer(true).parse((response, callback) => {
+    const chunks: Buffer[] = []; response.on("data", (chunk: Buffer) => chunks.push(chunk));
+    response.on("end", () => callback(null, Buffer.concat(chunks))); response.on("error", callback);
+  }).expect(200);
+  expect(zip.headers["content-type"]).toContain("application/zip"); expect(zip.headers["content-disposition"]).toContain("attachment");
+  await request(app).get("/api/backups?courseId=unknown").expect(404);
+  expect((await request(app).get("/api/export").expect(200)).body.courses).toEqual(oldJson.courses);
+  const uploaded = await request(app).post("/api/restores").attach("file", zip.body, "backup.zip").expect(201);
+  const id = uploaded.body.id;
+  await request(app).get(`/api/restores/${id}`).expect(200);
+  const confirmed = await request(app).post(`/api/restores/${id}/confirm`).expect(200);
+  expect((await request(app).post(`/api/restores/${id}/confirm`).expect(200)).body).toEqual(confirmed.body);
+  expect((await request(app).get("/api/courses").expect(200)).body.courses).toHaveLength(2);
+  const restoredSource = await request(app).get(`/api/courses/${confirmed.body.courseIds[0]}/source`).expect(200);
+  expect(restoredSource.text).toContain("正文");
+  await request(app).post("/api/restores").attach("file", Buffer.from("bad archive"), "bad.zip").expect(422);
+  const cancelled = await request(app).post("/api/restores").attach("file", zip.body, "backup.zip").expect(201);
+  await request(app).delete(`/api/restores/${cancelled.body.id}`).expect(204);
+  await request(app).get(`/api/restores/${cancelled.body.id}`).expect(404);
+});

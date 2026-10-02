@@ -4,6 +4,10 @@ import path from "node:path";
 import matter from "gray-matter";
 
 import type { CourseId } from "../shared/course.js";
+import { pendingImportCourseIds } from "./course-import-recovery.js";
+import { pendingRestoreCourseIds } from "./course-restore-recovery.js";
+import { backupFileIo } from "./native-file-io.js";
+import { safeCourseMatter } from "./safe-course-matter.js";
 
 export interface ConfiguredCourse {
   id: CourseId;
@@ -62,24 +66,28 @@ export async function loadDashboardConfig(configPath: string, managedRoot?: stri
   }
 
   if (managedRoot) {
+    const pendingIds = await pendingImportCourseIds(path.dirname(path.resolve(managedRoot)));
+    let restoreUnavailable = false;
+    try { for (const id of await pendingRestoreCourseIds(path.dirname(path.resolve(managedRoot)))) pendingIds.add(id); }
+    catch { restoreUnavailable = true; /* Do not discover an unverified, partially published restore. */ }
     const entries = await readdir(managedRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
       throw error;
     });
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!entry.isDirectory() || pendingIds.has(entry.name) || (restoreUnavailable && entry.name.startsWith("restored-"))) continue;
       const root = path.join(managedRoot, entry.name);
       const coursePath = path.join(root, "course.md");
-      const raw = await readFile(coursePath, "utf8").catch((error: NodeJS.ErrnoException) => {
+      const raw = await (entry.name.startsWith("restored-") ? backupFileIo.readFile(coursePath, 10485760).then((file) => Buffer.from(file.bytes).toString("utf8")) : readFile(coursePath, "utf8")).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
         throw error;
       });
       if (raw === null) continue;
-      const id = String(matter(raw).data.id ?? "");
+      const id = String(safeCourseMatter(raw).data.id ?? "");
       if (!COURSE_ID_PATTERN.test(id) || id !== entry.name) throw new Error(`${coursePath}: 托管课程 ID 无效`);
       if (ids.has(id)) throw new Error(`重复课程 ID“${id}”`);
       ids.add(id);
-      courses.push({ id, root: await realpath(root), enabled: true });
+      courses.push({ id, root: entry.name.startsWith("restored-") ? path.resolve(root) : await realpath(root), enabled: true });
     }
   }
 

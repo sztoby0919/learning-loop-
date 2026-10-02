@@ -1,20 +1,41 @@
-import { useState, useCallback, useRef, type ChangeEvent, type DragEvent } from "react";
+import { useState, useCallback, useRef, useEffect, type ChangeEvent, type DragEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { cancelCourseImport, confirmCourseImport, enrichCourseImport, updateCourseImport, uploadCourseFile, type CourseImportPreview, type UploadProgressCallback } from "../api.js";
+import { cancelCourseImport, confirmCourseImport, fetchCourseImport, listCourseImports, uploadCourseFile, type CourseImportPreview, type UploadProgressCallback } from "../api.js";
+import type { DraftSummary } from "../../shared/course-import.js";
+import { useImportAutosave } from "../hooks/useImportAutosave.js";
+import { ImportQualityReport } from "../components/ImportQualityReport.js";
+import { ImportAiPanel } from "../components/ImportAiPanel.js";
+import { ImportNavigationGuard } from "../components/ImportNavigationGuard.js";
 
 export function CourseImportPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [preview, setPreview] = useState<CourseImportPreview | null>(null);
   const [busy, setBusy] = useState(false);
-  const [processingAi, setProcessingAi] = useState(false);
-  const [consent, setConsent] = useState(false);
+  const processingAi = preview?.operation?.status === "running";
   const [error, setError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [lastUpload, setLastUpload] = useState<File | null>(null);
   const uploadLock = useRef(false);
+  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const autosave = useImportAutosave(preview, setPreview);
+  const structuralBusy = busy || autosave.status === "saving";
+  const requestedDraft = searchParams.get("draft");
+
+  useEffect(() => {
+    let active = true;
+    if (requestedDraft) {
+      if (preview?.id === requestedDraft) return;
+      setBusy(true);
+      void fetchCourseImport(requestedDraft).then((saved) => { if (active) { setPreview(saved); setError(null); } }).catch((cause) => { if (active) handleError(cause); }).finally(() => { if (active) setBusy(false); });
+    } else if (!preview) {
+      void listCourseImports().then((entries) => { if (active) setDrafts(Array.isArray(entries) ? entries : []); }).catch(() => { if (active) setRecoveryError("暂时无法读取已保存草稿，请稍后重新打开此页。"); });
+    }
+    return () => { active = false; };
+  }, [requestedDraft]);
 
   const handleError = (cause: unknown) => setError(cause instanceof Error ? cause.message : "操作失败，请稍后重试");
 
@@ -36,6 +57,7 @@ export function CourseImportPage() {
     try {
       const result = await uploadCourseFile(file, onProgress);
       setPreview(result);
+      setSearchParams({ draft: result.id }, { replace: true });
       setLastUpload(null);
       setUploadProgress(null);
     } catch (cause) {
@@ -90,43 +112,41 @@ export function CourseImportPage() {
     changeDraft({ stages });
   };
 
-  const save = async (current: CourseImportPreview) => {
-    const updated = await updateCourseImport(current);
-    setPreview(updated);
-    return updated;
-  };
-
   const refreshPreview = async () => {
     if (!preview) return;
     setBusy(true); setError(null);
-    try { await save(preview); } catch (cause) { handleError(cause); } finally { setBusy(false); }
-  };
-
-  const enrich = async () => {
-    if (!preview || !consent) return;
-    setBusy(true); setProcessingAi(true); setError(null);
-    try {
-      const saved = await save(preview);
-      setPreview(await enrichCourseImport(saved.id));
-    } catch (cause) { handleError(cause); }
-    finally { setProcessingAi(false); setBusy(false); }
+    try { await autosave.flush(); } catch (cause) { handleError(cause); } finally { setBusy(false); }
   };
 
   const confirm = async () => {
     if (!preview) return;
     setBusy(true); setError(null);
     try {
-      const saved = await save(preview);
-      const result = await confirmCourseImport(saved.id);
+      const saved = await autosave.flush();
+      const result = await confirmCourseImport(saved.id, saved.revision);
       navigate(`/courses/${result.courseId}?from=import`);
     } catch (cause) { handleError(cause); setBusy(false); }
   };
 
   const cancel = async () => {
     if (!preview) { navigate("/courses"); return; }
+    if (!window.confirm("删除这个草稿和上传副本？此操作不可恢复。")) return;
     setBusy(true); setError(null);
-    try { await cancelCourseImport(preview.id); navigate("/courses"); }
+    try { await cancelCourseImport(preview.id); autosave.allowDiscard(); navigate("/courses"); }
     catch (cause) { handleError(cause); setBusy(false); }
+  };
+
+  const deleteDraft = async (draft: DraftSummary) => {
+    if (!window.confirm(`删除“${draft.title}”草稿和上传副本？此操作不可恢复。`)) return;
+    setBusy(true); setError(null);
+    try { await cancelCourseImport(draft.id); setDrafts((entries) => entries.filter((entry) => entry.id !== draft.id)); }
+    catch (cause) { handleError(cause); }
+    finally { setBusy(false); }
+  };
+  const reloadDraft = async () => {
+    if (!window.confirm("重新加载将丢弃当前未保存的编辑，继续吗？")) return;
+    setBusy(true);
+    try { await autosave.reload(); setError(null); } catch (cause) { handleError(cause); } finally { setBusy(false); }
   };
 
   const acceptTypes = ".pdf,.docx,.md,.txt,.markdown,.html,.htm,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/html";
@@ -138,7 +158,9 @@ export function CourseImportPage() {
   };
 
   return <div className="workspace-page import-page">
+    <ImportNavigationGuard hasUnsavedChanges={autosave.hasUnsavedChanges} />
     <div className="section-heading"><h2>从文档创建课程</h2><span>本地单用户 · PDF / Word / Markdown / HTML</span></div>
+    {!preview && !requestedDraft && <section className="workspace-panel import-recovery"><h3>继续已保存的草稿</h3><p>草稿自上传起保留 7 天，编辑不会延长有效期。只有显示“已保存”的内容可以恢复。</p>{recoveryError && <p>{recoveryError}</p>}{drafts.map((draft) => <div className="import-recovery-entry" key={draft.id}><span>{draft.title}</span><span>到期：{new Date(draft.expiresAt).toLocaleString()}</span>{draft.warning && <span>{draft.warning}</span>}<div className="import-actions"><button type="button" disabled={busy || draft.status !== "ready"} onClick={() => setSearchParams({ draft: draft.id })}>继续编辑</button><button type="button" aria-label={`删除${draft.title}草稿`} disabled={busy} onClick={() => void deleteDraft(draft)}>删除草稿</button></div></div>)}</section>}
     {!preview && <section
       className={`workspace-panel import-upload ${dragOver ? "drag-over" : ""}`}
       onDrop={(e) => void handleDrop(e)}
@@ -166,6 +188,9 @@ export function CourseImportPage() {
     {preview && <>
       <section className="workspace-panel import-summary">
         <h3>课程草稿</h3>
+        <p role="status" aria-label="草稿保存状态">{{ saved: "已保存", unsaved: "未保存", saving: "保存中…", invalid: "未保存：请填写有效的名称、阶段和任务", error: "保存失败", conflict: "修订冲突：未覆盖已保存内容" }[autosave.status]}</p>
+        {preview.expiresAt && <p>草稿到期：{new Date(preview.expiresAt).toLocaleString()}</p>}
+        {autosave.error && <div><p role="alert">{autosave.error.message}</p>{autosave.status === "conflict" ? <button type="button" disabled={busy} onClick={() => void reloadDraft()}>重新加载已保存草稿</button> : <button type="button" disabled={busy} onClick={() => void autosave.retry().catch(handleError)}>重试保存</button>}</div>}
         <p>
           {preview.draft.originalFilename} · {preview.draft.pageCount} {preview.draft.sourceFormat === "text" ? "段文本" : "页"}
           <span className={`file-type-badge ${preview.draft.sourceFormat}`}>
@@ -177,29 +202,23 @@ export function CourseImportPage() {
         <label>每周学习时间（小时，可选）<input aria-label="每周学习时间" type="number" min="1" max="80" value={preview.draft.weeklyHours ?? ""} onChange={(event) => changeDraft({ weeklyHours: event.target.value ? Number(event.target.value) : null })} disabled={busy} /></label>
         {preview.draft.warnings.length > 0 && <div className="import-warnings"><strong>导入提醒</strong><ul>{preview.draft.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}
       </section>
+      <ImportQualityReport quality={preview.draft.quality} sourceUrl={preview.sourceUrl} />
       <section className="workspace-panel import-stages"><h3>学习阶段与任务</h3><p>可以修改标题与任务；完成情况需在学习后记录。</p>
-        {preview.draft.stages.map((stage, index) => <div className="import-stage" key={index}>
+        {preview.draft.stages.map((stage, index) => <div className="import-stage" key={stage.id ?? index}>
           <div className="import-stage-header">
             <label>阶段 {index + 1}<input aria-label={`阶段 ${index + 1}`} value={stage.title} onChange={(event) => changeStage(index, { title: event.target.value })} disabled={busy} /></label>
             <div className="import-stage-move">
-              <button type="button" onClick={() => moveStage(index, -1)} disabled={busy || index === 0} title="上移">↑</button>
-              <button type="button" onClick={() => moveStage(index, 1)} disabled={busy || index === preview.draft.stages.length - 1} title="下移">↓</button>
+              <button type="button" onClick={() => moveStage(index, -1)} disabled={structuralBusy || index === 0} title="上移">↑</button>
+              <button type="button" onClick={() => moveStage(index, 1)} disabled={structuralBusy || index === preview.draft.stages.length - 1} title="下移">↓</button>
             </div>
           </div>
           {stage.tasks.map((task, taskIndex) => <label key={taskIndex}>任务 {taskIndex + 1}<input aria-label={`阶段 ${index + 1} 任务 ${taskIndex + 1}`} value={task} onChange={(event) => changeStage(index, { tasks: stage.tasks.map((item, position) => position === taskIndex ? event.target.value : item) })} disabled={busy} /></label>)}
-          <div className="import-actions"><button type="button" onClick={() => changeStage(index, { tasks: [...stage.tasks, "新任务"] })} disabled={busy}>添加任务</button><button type="button" onClick={() => changeDraft({ stages: preview.draft.stages.filter((_, position) => position !== index) })} disabled={busy || preview.draft.stages.length <= 1}>移除阶段</button></div>
+          <div className="import-actions"><button type="button" onClick={() => changeStage(index, { tasks: [...stage.tasks, "新任务"] })} disabled={structuralBusy}>添加任务</button><button type="button" onClick={() => changeDraft({ stages: preview.draft.stages.filter((_, position) => position !== index) })} disabled={structuralBusy || preview.draft.stages.length <= 1}>移除阶段</button></div>
         </div>)}
-        <button type="button" onClick={() => changeDraft({ stages: [...preview.draft.stages, { title: "新阶段", tasks: ["新任务"] }] })} disabled={busy}>添加阶段</button>
+        <button type="button" onClick={() => changeDraft({ stages: [...preview.draft.stages, { title: "新阶段", tasks: ["新任务"] }] })} disabled={structuralBusy}>添加阶段</button>
       </section>
-      <section className="workspace-panel import-ai"><h3>可选：AI 完善</h3>
-        <p>仅在你同意后，将课程名称、你填写的学习目标和每周学习时间，以及目录和代表性页面摘录（摘录最多约 {preview.excerptChars.toLocaleString()} 字符）发送给已配置的模型服务；不会发送完整原文档。生成结果只是章节级草稿，请核对原文。</p>
-        {preview.aiAvailable ? <><label><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} disabled={busy} />同意发送上述摘录给模型服务</label><div className="import-ai-actions"><button type="button" onClick={() => void enrich()} disabled={!consent || busy}>AI 完善草稿</button>{processingAi && <span className="import-ai-progress" role="status" aria-label="AI 正在完善草稿"><span className="import-ai-spinner" aria-hidden="true" />正在完善草稿…</span>}</div></> : <p>未配置真实模型 API，当前可直接创建基础课程。</p>}
-        {preview.draft.sourceFormat === "docx" && <p>已导入 Word 文档，提纲基于文档标题结构生成。</p>}
-        {preview.draft.sourceFormat === "text" && <p>已提取文本内容，提纲基于 Markdown 标题或 HTML h1–h3 标题生成。</p>}
-        {preview.draft.aiStatus === "complete" && <p>AI 已完善草稿，请在创建前核对提纲和笔记。</p>}
-        {preview.draft.aiStatus === "failed" && <p>AI 完善失败，基础草稿仍可创建。</p>}
-      </section>
-      <section className="workspace-panel import-preview"><div className="section-heading"><h3>将生成的课程文件</h3><button type="button" onClick={() => void refreshPreview()} disabled={busy}>更新预览</button></div><p>编辑后点击"更新预览"；确认创建时也会自动保存当前编辑。</p>
+      <ImportAiPanel preview={preview} flush={autosave.flush} onPreviewChanged={setPreview} onBusyChange={setBusy} />
+      <section className="workspace-panel import-preview"><div className="section-heading"><h3>将生成的课程文件</h3><button type="button" onClick={() => void refreshPreview()} disabled={busy}>更新预览</button></div><p>编辑停顿约 800 毫秒后自动保存；更新预览和确认创建会等待保存完成。</p>
         {Object.entries(preview.files).map(([name, content]) => <details key={name}><summary>{name}</summary><pre>{content}</pre></details>)}
         <p>另会保存原始文档文件，并创建空的 sessions/ 目录。</p>
       </section>

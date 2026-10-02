@@ -1,0 +1,75 @@
+import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { expect, test } from "@playwright/test";
+import { createApp } from "../../src/server/app.js";
+import { CourseEventBus } from "../../src/server/course-events.js";
+import { CourseImportManager } from "../../src/server/course-import-manager.js";
+import { WorkspaceRepository } from "../../src/server/workspace-repository.js";
+import { textPdf } from "../../src/test/pdf-fixtures.js";
+
+test("已保存草稿刷新恢复、问题页来源可打开，并在隔离目录创建课程", async ({ page }) => {
+  const root = await mkdtemp(path.join(tmpdir(), "learning-loop-recovery-e2e-"));
+  const today = () => "2026-10-01";
+  const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, today);
+  const events = new CourseEventBus();
+  const imports = new CourseImportManager({ root, repository, events, today, watchCourse: () => {} });
+  await imports.initialize();
+  const server = createApp(repository, events, undefined, imports).listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Missing test server address");
+  const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    await page.goto(`${origin}/courses/import`);
+    await page.getByLabel("选择文件").setInputFiles({ name: "recovery.pdf", mimeType: "application/pdf", buffer: Buffer.from(textPdf(["Chapter 1 Recovery", ""])) });
+    await expect(page.getByLabel("课程名称")).toHaveValue("recovery");
+    await expect(page).toHaveURL(/\?draft=[a-f0-9-]+$/);
+    const draftUrl = page.url();
+    await page.getByLabel("课程名称").fill("");
+    const dialog = page.waitForEvent("dialog");
+    // Programmatic click reaches the same NavLink on desktop and the closed mobile menu.
+    await page.locator('a[href="/courses"]').first().evaluate((link: HTMLAnchorElement) => link.click());
+    const warning = await dialog;
+    expect(warning.message()).toContain("未保存");
+    await warning.dismiss();
+    await expect(page).toHaveURL(draftUrl);
+    await expect(page.getByLabel("课程名称")).toHaveValue("");
+    await page.getByLabel("课程名称").fill("可恢复课程");
+    await expect(page.getByRole("status", { name: "草稿保存状态" })).toHaveText("已保存");
+    await page.reload();
+    await expect(page.getByLabel("课程名称")).toHaveValue("可恢复课程");
+    await page.getByRole("button", { name: "无可提取文字（1 页）" }).click();
+    const responsePromise = page.context().waitForEvent("response", (response) => /\/api\/course-imports\/[^/]+\/source$/.test(new URL(response.url()).pathname));
+    const popupPromise = page.waitForEvent("popup");
+    await page.getByRole("link", { name: "第 2 页" }).click();
+    const [popup, response] = await Promise.all([popupPromise, responsePromise]);
+    expect(response.status()).toBe(200);
+    await expect(popup).toHaveURL(/\/source#page=2$/);
+    await popup.close();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.getByRole("button", { name: "确认创建课程" }).click();
+    await expect(page).toHaveURL(/\/courses\/course-[a-z0-9-]+\?from=import$/);
+    await expect(page.getByRole("heading", { name: "可恢复课程", exact: true })).toBeVisible();
+    const summaries = await page.request.get(`${origin}/api/course-imports`);
+    expect(await summaries.json()).toEqual([]);
+    await page.goto(`${origin}/courses/import`);
+    await page.getByLabel("选择文件").setInputFiles({ name: "long-report.pdf", mimeType: "application/pdf", buffer: Buffer.from(textPdf(["Chapter 1 Reading", ...Array.from({ length: 999 }, () => "")])) });
+    await page.getByRole("button", { name: "无可提取文字（999 页）" }).click();
+    await expect(page.locator(".import-quality-pages a")).toHaveCount(50);
+    await page.getByRole("button", { name: "下一组无可提取文字页码" }).click();
+    await expect(page.getByRole("link", { name: "第 52 页", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "取消导入" }).click();
+    await expect(page).toHaveURL(/\/courses$/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    imports.stopScheduledCleanup();
+    const resolved = path.resolve(root);
+    if (path.dirname(resolved) !== path.resolve(tmpdir()) || !path.basename(resolved).startsWith("learning-loop-recovery-e2e-")) throw new Error("Unsafe test cleanup target");
+    await rm(resolved, { recursive: true, force: true });
+  }
+});

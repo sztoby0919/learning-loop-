@@ -9,6 +9,7 @@ import type {
   LearningRecord,
 } from "./ai-types.js";
 import type { SafeParseReturnType } from "zod";
+import { requestChatCompletion } from "./ai-request.js";
 import {
   validateAssessmentQuestions,
   validateAnswerFeedback,
@@ -137,30 +138,10 @@ export class OpenAiCompatibleProvider {
     });
   }
 
-  private async callApi(messages: ChatCompletionMessage[]): Promise<ChatCompletionResponse> {
-    const url = `${this.config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-    const response = await fetch(url, {
-      method: "POST",
-      signal: AbortSignal.timeout(90_000),
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.config.model,
-        messages,
-        max_tokens: this.config.maxTokens,
-        temperature: this.config.temperature,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`模型服务返回 HTTP ${response.status}`);
-    }
-
-    const payload = await response.json() as ChatCompletionResponse;
+  private async callApi(messages: ChatCompletionMessage[], signal?: AbortSignal): Promise<ChatCompletionResponse> {
+    const payload = await requestChatCompletion(this.config, messages, { signal }) as ChatCompletionResponse;
     if (!Array.isArray(payload?.choices) || typeof payload.choices[0]?.message?.content !== "string") {
-      throw new Error("模型服务响应缺少文本内容");
+      throw new AiResponseFormatError(["模型服务响应缺少文本内容"]);
     }
     return payload;
   }
@@ -171,14 +152,33 @@ export class OpenAiCompatibleProvider {
       return JSON.parse(content) as T;
     } catch {
       // 尝试提取 JSON 块
-      const jsonMatch = content.match(/```json\n([\s\S]*?)```/);
+      const jsonMatch = content.match(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/i);
       if (jsonMatch) {
         try { return JSON.parse(jsonMatch[1]) as T; } catch { /* try another format */ }
       }
-      // 尝试提取花括号内容
-      const braceMatch = content.match(/\{[\s\S]*\}/);
-      if (braceMatch) {
-        try { return JSON.parse(braceMatch[0]) as T; } catch { /* report a safe error */ }
+      // 只提取完整的最外层对象或数组，不将截断数组中的单个题目当作结果。
+      const start = content.search(/[\[{]/);
+      const closing: string[] = [];
+      let inString = false;
+      let escaped = false;
+      for (let index = start; start >= 0 && index < content.length; index++) {
+        const char = content[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') inString = true;
+        else if (char === "[") closing.push("]");
+        else if (char === "{") closing.push("}");
+        else if (char === "]" || char === "}") {
+          if (closing.pop() !== char) break;
+          if (closing.length === 0) {
+            try { return JSON.parse(content.slice(start, index + 1)) as T; } catch { /* report a safe error */ }
+            break;
+          }
+        }
       }
       throw new AiResponseFormatError(["JSON"]);
     }
@@ -200,7 +200,7 @@ export class OpenAiCompatibleProvider {
     count: number;
     difficulty: string;
     context: string;
-  }): Promise<AssessmentQuestion[]> {
+  }, signal?: AbortSignal): Promise<AssessmentQuestion[]> {
     const start = Date.now();
     try {
       const response = await this.callApi([
@@ -212,7 +212,7 @@ export class OpenAiCompatibleProvider {
           role: "user",
           content: `课程主题：${params.topic}\n\n课程内容：${params.context}\n\n请生成 ${params.count} 道单选题。`,
         },
-      ]);
+      ], signal);
 
       const content = response.choices[0].message.content;
       const questions = this.parseAndValidate(content, validateAssessmentQuestions, normalizeQuestions);
@@ -243,7 +243,7 @@ export class OpenAiCompatibleProvider {
     question: AssessmentQuestion;
     answer: string;
     context: string;
-  }): Promise<AnswerFeedback> {
+  }, signal?: AbortSignal): Promise<AnswerFeedback> {
     const start = Date.now();
     try {
       const response = await this.callApi([
@@ -255,7 +255,7 @@ export class OpenAiCompatibleProvider {
           role: "user",
           content: `题目 ID：${params.question.id}\n问题：${params.question.question}\n参考答案：${params.question.answer}\n课程参考：${params.context.slice(0, 12_000)}\n学生回答：${params.answer}\n\n请评估学生回答。`,
         },
-      ]);
+      ], signal);
 
       const content = response.choices[0].message.content;
       const feedback = this.parseAndValidate(content, validateAnswerFeedback, normalizeFeedback);
@@ -286,7 +286,7 @@ export class OpenAiCompatibleProvider {
     courseId: string;
     answers: Array<{ question: AssessmentQuestion; answer: string; feedback: AnswerFeedback }>;
     learningRecords: LearningRecord[];
-  }): Promise<DiagnosisResult> {
+  }, signal?: AbortSignal): Promise<DiagnosisResult> {
     const start = Date.now();
     try {
       const answersText = params.answers
@@ -305,7 +305,7 @@ export class OpenAiCompatibleProvider {
           role: "user",
           content: `课程ID：${params.courseId}\n当前日期：${todayInShanghai()}\n\n作答情况：\n${answersText}\n\n历史学习记录：${JSON.stringify(params.learningRecords, null, 2)}`,
         },
-      ]);
+      ], signal);
 
       const content = response.choices[0].message.content;
       const diagnosis = this.parseAndValidate(content, validateDiagnosisResult, normalizeDiagnosis);
@@ -336,7 +336,7 @@ export class OpenAiCompatibleProvider {
     concept: string;
     level: string;
     context: string;
-  }): Promise<{ explanation: string; analogy: string; examples: string[] }> {
+  }, signal?: AbortSignal): Promise<{ explanation: string; analogy: string; examples: string[] }> {
     const start = Date.now();
     try {
       const response = await this.callApi([
@@ -348,7 +348,7 @@ export class OpenAiCompatibleProvider {
           role: "user",
           content: `概念：${params.concept}\n难度级别：${params.level}\n\n请用费曼学习法解释这个概念。`,
         },
-      ]);
+      ], signal);
 
       const content = response.choices[0].message.content;
       const result = this.parseAndValidate(content, validateFeynmanExplanation);
@@ -378,7 +378,7 @@ export class OpenAiCompatibleProvider {
   async generateRemediationTasks(params: {
     weakPoints: DiagnosisResult["weakPoints"];
     currentLevel: string;
-  }): Promise<string[]> {
+  }, signal?: AbortSignal): Promise<string[]> {
     const start = Date.now();
     try {
       const response = await this.callApi([
@@ -390,7 +390,7 @@ export class OpenAiCompatibleProvider {
           role: "user",
           content: `薄弱知识点：${JSON.stringify(params.weakPoints, null, 2)}\n当前水平：${params.currentLevel}\n\n请生成补救任务列表。`,
         },
-      ]);
+      ], signal);
 
       const content = response.choices[0].message.content;
       const tasks = this.parseAndValidate(content, validateRemediationTasks);

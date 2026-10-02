@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { CourseArtifactHealth, CourseSummary } from "../../shared/course.js";
 import { downloadAllData } from "../api.js";
 import { usePreferences } from "../preferences.js";
+import { CourseBackupPanel } from "../components/CourseBackupPanel.js";
 
 export interface SettingsData {
   configPath: string;
@@ -83,6 +84,7 @@ export function SettingsPage({ settings, courses }: { settings: SettingsData; co
         {exportError && <p role="alert">导出失败：{exportError}</p>}
         <small>导出为 JSON，包含课程 Markdown 和学习记录，不包含原始 PDF/Word 等课件。</small>
       </section>
+      <CourseBackupPanel courses={courses} />
       <section className="workspace-panel">
         <div className="section-heading"><h2>外观设置</h2></div>
         <div className="theme-toggle">

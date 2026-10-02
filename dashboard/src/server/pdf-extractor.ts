@@ -1,6 +1,7 @@
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 import type { ExtractedDocument } from "./course-import.js";
+import { readPdfPageText } from "./pdf-text-layout.js";
 
 export class PdfImportError extends Error {
   constructor(readonly code: "INVALID_PDF" | "ENCRYPTED" | "NO_TEXT" | "TOO_MANY_PAGES", message: string) {
@@ -22,13 +23,18 @@ export async function extractPdf(bytes: Uint8Array, filename: string): Promise<E
     if (document.numPages > 1000) throw new PdfImportError("TOO_MANY_PAGES", "PDF 超过 1,000 页，请拆分后导入");
     const pages: ExtractedDocument["pages"] = [];
     const inferred: ExtractedDocument["outline"] = [];
+    const complexPages: number[] = [];
+    const sidePages: number[] = [];
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
       const page = await document.getPage(pageNumber);
       const content = await page.getTextContent();
-      const text = content.items.flatMap((item) => "str" in item ? [item.str] : []).join(" ").replace(/\s+/g, " ").trim();
+      const layout = readPdfPageText(content.items, page.view[2] - page.view[0]);
+      const text = layout.text;
+      if (layout.complexLayout) complexPages.push(pageNumber);
+      if (layout.hasSideNotes) sidePages.push(pageNumber);
       pages.push({ page: pageNumber, text });
       if (chapterPattern.test(text.slice(0, 100))) {
-        inferred.push({ title: text.slice(0, 90), page: pageNumber });
+        inferred.push({ title: text.split("\n")[0].slice(0, 90), page: pageNumber });
       }
       page.cleanup();
     }
@@ -54,7 +60,12 @@ export async function extractPdf(bytes: Uint8Array, filename: string): Promise<E
       pageCount: document.numPages,
       pages,
       outline: outline.length ? outline : inferred,
-      warnings: pages.some((page) => !page.text) ? ["部分页面没有可提取文字，可能包含图片或扫描内容。"] : [],
+      quality: { version: 1, noTextPages: pages.filter((page) => !page.text).map((page) => page.page), sideNotePages: sidePages, complexPages },
+      warnings: [
+        ...(pages.some((page) => !page.text) ? ["部分页面没有可提取文字，可能是空白页、图片或扫描内容，请对照原 PDF 检查。"] : []),
+        ...(sidePages.length ? [`${sidePages.length} 页识别到可能的旁注，已移至该页正文之后；请对照原页确认阅读顺序。`] : []),
+        ...(complexPages.length ? [`${complexPages.length} 页可能存在分栏、表格或复杂排版，文字行顺序仅为估算，未重建表格或数学公式。`] : []),
+      ],
       sourceFormat: "pdf",
     };
   } catch (error) {

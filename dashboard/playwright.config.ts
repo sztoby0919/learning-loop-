@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const e2ePort = 4274;
+const e2ePort = Number(process.env.LEARNING_LOOP_E2E_PORT ?? 4274);
+if (!Number.isInteger(e2ePort) || e2ePort < 1 || e2ePort > 65535) throw new Error("LEARNING_LOOP_E2E_PORT 必须是 1–65535 的整数");
 const browserChannel = process.platform === "win32" ? ("msedge" as const) : undefined;
 
 export default defineConfig({
@@ -20,7 +21,9 @@ export default defineConfig({
   ],
   webServer: {
     command: "node --import tsx/esm src/server/index.ts",
-    url: `http://127.0.0.1:${e2ePort}/api/courses`,
+    // The app listens only after initialization. TCP preflight also catches
+    // unrelated services whose HTTP endpoints return 404 or are unhealthy.
+    port: e2ePort,
     env: {
       PORT: String(e2ePort),
       AI_API_KEY: "",
@@ -28,7 +31,7 @@ export default defineConfig({
       NO_PROXY: "127.0.0.1,localhost",
       no_proxy: "127.0.0.1,localhost",
     },
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     gracefulShutdown: { signal: "SIGTERM", timeout: 1_000 },
     timeout: 30_000,
   },

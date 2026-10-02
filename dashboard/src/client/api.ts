@@ -1,6 +1,27 @@
 import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, MistakeItem, NoteDocument, PracticeChoice, PracticeSessionConfirmed, PracticeSessionCreated, ResourceItem, ReviewItem, ScheduledReview, SourceReference, TaskReference } from "../shared/course.js";
 import type { AnswerFeedback } from "../server/ai-types.js";
 import type { SettingsData } from "./pages/SettingsPage.js";
+import type { BackupManifest, RestorePreview } from "../shared/course-backup.js";
+
+const backupQuery = (courseId?: string) => courseId ? `?courseId=${encodeURIComponent(courseId)}` : "";
+export const previewBackup = (courseId?: string) => requestJson<BackupManifest>(`/api/backups/preview${backupQuery(courseId)}`);
+export async function downloadBackup(courseId?: string): Promise<void> {
+  const response = await fetch(`/api/backups${backupQuery(courseId)}`);
+  if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error ?? `HTTP ${response.status}`); }
+  const blob = await response.blob(); const url = URL.createObjectURL(blob);
+  const link = document.createElement("a"); link.href = url; link.download = `learning-loop-${new Date().toISOString().slice(0, 10)}.zip`;
+  try { link.click(); } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+}
+export const fetchRestore = (id: string, signal?: AbortSignal) => importRequest<RestorePreview>(`/api/restores/${encodeURIComponent(id)}`, { method: "GET", signal });
+export function uploadRestore(file: File): Promise<RestorePreview> {
+  const body = new FormData(); body.append("file", file);
+  return importRequest("/api/restores", { method: "POST", body });
+}
+export const confirmRestore = (id: string) => importRequest<{ courseIds: string[] }>(`/api/restores/${encodeURIComponent(id)}/confirm`, { method: "POST" });
+export async function cancelRestore(id: string): Promise<void> {
+  const response = await fetch(`/api/restores/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new ImportRequestError(payload.error ?? `HTTP ${response.status}`, response.status); }
+}
 
 async function requestJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { signal });
@@ -52,31 +73,29 @@ export function confirmPracticeSession(sessionId: string): Promise<PracticeSessi
   return importRequest(`/api/practice-sessions/${encodeURIComponent(sessionId)}/confirm`, { method: "POST" });
 }
 
-export interface CourseImportPreview {
-  id: string;
-  courseId: string;
-  draft: {
-    title: string;
-    originalFilename: string;
-    pageCount: number;
-    goal: string;
-    weeklyHours: number | null;
-    stages: Array<{ title: string; tasks: string[] }>;
-    notes: Array<{ title: string; page: number; content: string }>;
-    warnings: string[];
-    aiStatus: "not-used" | "complete" | "failed";
-    sourceFormat: "pdf" | "docx" | "text";
-  };
-  files: Record<string, string>;
-  aiAvailable: boolean;
-  excerptChars: number;
+import type { AiExcerpt, AiOperation, CourseImportPreview, DraftSummary } from "../shared/course-import.js";
+export type { CourseImportPreview } from "../shared/course-import.js";
+
+export class ImportRequestError extends Error {
+  constructor(message: string, public readonly status: number) { super(message); }
 }
+
+export const listCourseImports = () => importRequest<DraftSummary[]>("/api/course-imports", { method: "GET" });
+export const fetchCourseImport = (id: string, signal?: AbortSignal) => importRequest<CourseImportPreview>(`/api/course-imports/${encodeURIComponent(id)}`, { method: "GET", signal });
+const importJson = <T>(id: string, route: string, body: unknown, method = "POST") => importRequest<T>(`/api/course-imports/${encodeURIComponent(id)}/${route}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const previewImportAi = (id: string, expectedRevision: number, stageIds: string[]) => importJson<AiExcerpt>(id, "ai-excerpt", { expectedRevision, stageIds });
+export const startImportAi = (id: string, excerpt: AiExcerpt) => importJson<AiOperation>(id, "ai-operations", { expectedRevision: excerpt.revision, stageIds: excerpt.stageIds, excerptHash: excerpt.excerptHash, consent: true });
+export const getImportAi = (id: string, operationId: string, signal?: AbortSignal) => importRequest<AiOperation>(`/api/course-imports/${encodeURIComponent(id)}/ai-operations/${encodeURIComponent(operationId)}`, { method: "GET", signal });
+export const cancelImportAi = (id: string, operationId: string) => importRequest<AiOperation>(`/api/course-imports/${encodeURIComponent(id)}/ai-operations/${encodeURIComponent(operationId)}`, { method: "DELETE" });
+export const applyImportAi = (id: string, candidateId: string, expectedRevision: number, acceptedStageIds: string[]) => importJson<CourseImportPreview>(id, `ai-candidates/${encodeURIComponent(candidateId)}/apply`, { expectedRevision, acceptedStageIds });
+export const rejectImportAi = (id: string, candidateId: string, expectedRevision: number) => importJson<CourseImportPreview>(id, `ai-candidates/${encodeURIComponent(candidateId)}`, { expectedRevision }, "DELETE");
+export const undoImportAi = (id: string, expectedRevision: number) => importJson<CourseImportPreview>(id, "ai-undo", { expectedRevision });
 
 async function importRequest<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: `HTTP ${response.status}` })) as { error?: string };
-    throw new Error(payload.error ?? `HTTP ${response.status}`);
+    throw new ImportRequestError(payload.error ?? `HTTP ${response.status}`, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -111,15 +130,11 @@ export function uploadCourseFile(file: File, onProgress?: UploadProgressCallback
 
 export function updateCourseImport(preview: CourseImportPreview): Promise<CourseImportPreview> {
   const { title, goal, weeklyHours, stages } = preview.draft;
-  return importRequest(`/api/course-imports/${preview.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, goal, weeklyHours, stages }) });
+  return importRequest(`/api/course-imports/${preview.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision: preview.revision, title, goal, weeklyHours, stages }) });
 }
 
-export function enrichCourseImport(id: string): Promise<CourseImportPreview> {
-  return importRequest(`/api/course-imports/${id}/enrich`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ consent: true }) });
-}
-
-export function confirmCourseImport(id: string): Promise<{ courseId: string }> {
-  return importRequest(`/api/course-imports/${id}/confirm`, { method: "POST" });
+export function confirmCourseImport(id: string, expectedRevision?: number): Promise<{ courseId: string }> {
+  return importRequest(`/api/course-imports/${id}/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision }) });
 }
 
 export interface ExportedData {

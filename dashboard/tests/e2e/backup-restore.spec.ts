@@ -1,0 +1,60 @@
+import { once } from "node:events";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { expect, test } from "@playwright/test";
+import { createApp } from "../../src/server/app.js";
+import { CourseEventBus } from "../../src/server/course-events.js";
+import { CourseImportManager } from "../../src/server/course-import-manager.js";
+import { CourseRestoreManager } from "../../src/server/course-restore.js";
+import { BackupZipCodec } from "../../src/server/backup-zip.js";
+import { WorkspaceRepository } from "../../src/server/workspace-repository.js";
+
+test("备份 ZIP 后预览恢复为新课程，原课件可打开，取消不发布", async ({ page }) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-backup-e2e-"));
+  const today = () => "2026-10-02"; const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, today);
+  const events = new CourseEventBus(); const imports = new CourseImportManager({ root, repository, events, today, watchCourse: () => {} });
+  const restores = new CourseRestoreManager({ root, repository, events, codec: new BackupZipCodec(), watchCourse: () => {} });
+  const originalText = "# 备份验收课程\n\n## 第一章\n本地原文与学习起点";
+  const draft = await imports.create(new TextEncoder().encode(originalText), "book.md");
+  const original = await imports.confirm(draft.id, draft.revision);
+  const server = createApp(repository, events, undefined, imports, "mock", restores).listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("Missing address");
+  const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    await page.goto(`${origin}/settings`);
+    await page.getByRole("button", { name: "预览 ZIP 备份" }).click();
+    await expect(page.getByText("包含受管原课件", { exact: true })).toBeVisible();
+    const downloadEvent = page.waitForEvent("download");
+    await page.getByRole("button", { name: "确认下载 ZIP" }).click();
+    const download = await downloadEvent; const zipPath = await download.path(); if (!zipPath) throw new Error("Missing download");
+    await page.getByLabel("选择 ZIP 备份").setInputFiles({ name: "backup.zip", mimeType: "application/zip", buffer: await readFile(zipPath) });
+    await page.getByRole("button", { name: "上传并校验 ZIP" }).click();
+    await expect(page.getByRole("heading", { name: "将恢复为新课程，不覆盖已有课程" })).toBeVisible();
+    expect(repository.config.courses).toHaveLength(1);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "确认恢复为新课程" })).toBeEnabled();
+    await page.getByRole("button", { name: "确认恢复为新课程" }).click();
+    await expect(page.getByText("成功恢复 1 门课程，原有课程未覆盖。")).toBeVisible();
+    expect(repository.config.courses).toHaveLength(2);
+    const restored = repository.config.courses.find((course) => course.id !== original.courseId)!;
+    expect(await readFile(path.join(restored.root, "source.md"), "utf8")).toBe(originalText);
+    const source = await page.request.get(`${origin}/api/courses/${restored.id}/source`); expect(source.ok()).toBe(true); expect(await source.text()).toBe(originalText);
+    await expect(page.getByLabel(`显示${draft.draft.title}`)).toHaveCount(2);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.getByLabel("选择 ZIP 备份").setInputFiles({ name: "backup.zip", mimeType: "application/zip", buffer: await readFile(zipPath) });
+    await page.getByRole("button", { name: "上传并校验 ZIP" }).click();
+    await page.getByRole("button", { name: "取消恢复" }).click();
+    await expect(page.getByRole("heading", { name: "将恢复为新课程，不覆盖已有课程" })).toHaveCount(0);
+    expect(repository.config.courses).toHaveLength(2);
+    await page.getByLabel("选择 ZIP 备份").setInputFiles({ name: "bad.zip", mimeType: "application/zip", buffer: Buffer.from("broken") });
+    await page.getByRole("button", { name: "上传并校验 ZIP" }).click();
+    await expect(page.getByRole("alert")).toContainText(/ZIP|校验/);
+  } finally {
+    server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()));
+    imports.stopScheduledCleanup(); restores.stopScheduledCleanup();
+    const resolved = path.resolve(root);
+    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith("learning-loop-backup-e2e-")) throw new Error("Unsafe cleanup");
+    await rm(resolved, { recursive: true, force: true });
+  }
+});

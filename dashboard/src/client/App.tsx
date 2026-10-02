@@ -1,6 +1,6 @@
 import { WarningCircle } from "@phosphor-icons/react";
 import { lazy, Suspense, useState, type ReactNode } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
+import { createBrowserRouter, createRoutesFromElements, Navigate, Route, RouterProvider, useParams } from "react-router-dom";
 
 import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesResponse, LearningStats, NoteDocument, ResourceItem, ReviewItem, ScheduledReview, SourceReference, TaskReference } from "../shared/course.js";
 import { fetchCalendar, fetchDueReviews, fetchNotes, fetchResources, fetchReviews, fetchSettings, fetchSourceReferences, fetchStats, fetchTasks } from "./api.js";
@@ -149,10 +149,8 @@ function CoursesRoute() { const { coursesState, courses } = useCoursesAndPrefere
 function CourseImportRoute() { return <AppShell connection="live"><Suspense fallback={<LoadingState />}><CourseImportPage /></Suspense></AppShell>; }
 function CalendarRoute() { const now = new Date(); const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`); const state = useApiData<CalendarEvent[]>((signal) => fetchCalendar(month, signal), month); return <AppShell connection={state.connection}><PageState loading={state.loading} error={state.error}>{state.data && <CalendarPage month={month} events={state.data} onMonthChange={setMonth} />}</PageState></AppShell>; }
 
-export function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
+function applicationRoutes() {
+  return createRoutesFromElements(<>
         <Route path="/" element={<DashboardRoute />} />
         <Route path="/courses" element={<CoursesRoute />} />
         <Route path="/courses/import" element={<CourseImportRoute />} />
@@ -168,7 +166,10 @@ export function App() {
         <Route path="/stats" element={<StatsRoute />} />
         <Route path="/settings" element={<SettingsRoute />} />
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
-  );
+  </>);
+}
+
+export function App() {
+  const [router] = useState(() => createBrowserRouter(applicationRoutes()));
+  return <RouterProvider router={router} />;
 }

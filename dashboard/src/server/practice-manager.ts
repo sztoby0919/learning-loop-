@@ -9,6 +9,7 @@ import { validateAssessmentQuestions } from "./ai-validators.js";
 import { AssessmentError } from "./assessment-manager.js";
 import { batchAtomicWrite, safeReadFile } from "./file-utils.js";
 import { AiResponseFormatError } from "./openai-compatible-provider.js";
+import { AiRequestError } from "./ai-request.js";
 import { readMistakes, readReviewStreak, renderAttemptSession } from "./session-records.js";
 import { prepareReviewUpdate, ReviewUpdateConflict } from "./review-completion.js";
 import { parseReviewsMarkdown } from "./artifact-parser.js";
@@ -118,7 +119,7 @@ export class PracticeManager {
         context,
       });
     } catch (error) {
-      if (error instanceof AiResponseFormatError) throw error;
+      if (error instanceof AiResponseFormatError || error instanceof AiRequestError) throw error;
       throw new AssessmentError("生成练习题失败，请稍后重试", 502);
     }
     if (

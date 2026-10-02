@@ -19,30 +19,30 @@ export interface AiProvider {
     count: number;
     difficulty: string;
     context: string;
-  }): Promise<AssessmentQuestion[]>;
+  }, signal?: AbortSignal): Promise<AssessmentQuestion[]>;
 
   submitAnswer(params: {
     question: AssessmentQuestion;
     answer: string;
     context: string;
-  }): Promise<AnswerFeedback>;
+  }, signal?: AbortSignal): Promise<AnswerFeedback>;
 
   generateDiagnosis(params: {
     courseId: string;
     answers: Array<{ question: AssessmentQuestion; answer: string; feedback: AnswerFeedback }>;
     learningRecords: LearningRecord[];
-  }): Promise<DiagnosisResult>;
+  }, signal?: AbortSignal): Promise<DiagnosisResult>;
 
   generateFeynmanExplanation(params: {
     concept: string;
     level: string;
     context: string;
-  }): Promise<{ explanation: string; analogy: string; examples: string[] }>;
+  }, signal?: AbortSignal): Promise<{ explanation: string; analogy: string; examples: string[] }>;
 
   generateRemediationTasks(params: {
     weakPoints: DiagnosisResult["weakPoints"];
     currentLevel: string;
-  }): Promise<string[]>;
+  }, signal?: AbortSignal): Promise<string[]>;
 }
 
 // Mock 实现 - 用于开发和测试

@@ -12,6 +12,7 @@ import { AiService } from "./ai-service.js";
 import { createApp } from "./app.js";
 import { CourseEventBus } from "./course-events.js";
 import { AiResponseFormatError } from "./openai-compatible-provider.js";
+import { AiRequestError } from "./ai-request.js";
 import { renderAttemptSession, readMistakes } from "./session-records.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 
@@ -146,6 +147,12 @@ describe("targeted practice API", () => {
     const result = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" }).expect(502);
     expect(result.body.error).toContain("生成练习题失败");
     expect(result.body.error).not.toContain("private provider detail");
+  });
+
+  it("preserves a safe timeout cause when targeted practice generation times out", async () => {
+    const { app, mistakeId } = await setup({ ...provider, async generateQuestions() { throw new AiRequestError("模型服务请求超时，已中止本地请求", 504); } });
+    const result = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" });
+    expect(result.status).toBe(504); expect(result.body.error).toContain("超时");
   });
 });
 

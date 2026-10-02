@@ -6,6 +6,7 @@ import type { Root, RootContent } from "mdast";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
+import { z } from "zod";
 
 import type { SourceReference } from "../shared/course.js";
 import type { CourseImportManager } from "./course-import-manager.js";
@@ -13,6 +14,7 @@ import { extractDocx } from "./docx-extractor.js";
 import { extractHtml } from "./html-extractor.js";
 import { extractText } from "./text-extractor.js";
 import type { WorkspaceRepository } from "./workspace-repository.js";
+import { readPdfPageText } from "./pdf-text-layout.js";
 
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 const limits: Record<string, number> = { ".pdf": 100, ".docx": 50, ".html": 20, ".htm": 20, ".md": 10, ".markdown": 10, ".txt": 10 };
@@ -61,6 +63,8 @@ function candidates(raw: string, artifact: "course" | "notes", extension: string
   if (parsed.data[artifact === "course" ? "id" : "courseId"] !== courseId) return [];
   const nodes = (unified().use(remarkParse).parse(parsed.content) as Root).children;
   const depth = artifact === "course" ? 3 : 2;
+  const provenance = z.object({ version: z.literal(1), entries: z.array(z.object({ headingIndex: z.number().int().min(0).max(59), heading: z.string().min(1).max(100), page: z.number().int().positive(), provenance: z.enum(["source", "ai"]) }).strict()).max(60) }).strict().safeParse(parsed.data.sourceNoteProvenance);
+  const validProvenance = provenance.success && new Set(provenance.data.entries.map((item) => item.headingIndex)).size === provenance.data.entries.length ? provenance.data.entries : null;
   let inSection = artifact === "notes";
   let headingIndex = -1;
   const result: Candidate[] = [];
@@ -84,13 +88,17 @@ function candidates(raw: string, artifact: "course" | "notes", extension: string
     const body = parsed.content.slice(marker.position?.end.offset ?? end, end).trim();
     // Reverse only the importer's explicitly versioned encoding. Preserve all
     // original # characters and backslashes; legacy Markdown stays untouched.
-    const text = parsed.data.sourceExcerptEncoding === "escaped-line-v1"
+    let text = parsed.data.sourceExcerptEncoding === "escaped-line-v1"
       ? body.replace(/^\\#/, "#").replace(/\\\\/g, "\\") : body;
+    if (parsed.data.sourceExcerptEncoding === "fenced-text-v2") {
+      const blocks = (unified().use(remarkParse).parse(body) as Root).children;
+      text = blocks.length === 1 && blocks[0].type === "code" && blocks[0].lang === "text" ? blocks[0].value : "";
+    }
     result.push({
       artifact, headingIndex, heading: textOf(node).trim(), position,
       // Missing/failed provenance is deliberately conservative: a failed
       // enrichment retry can leave notes from an earlier successful AI call.
-      aiDerived: parsed.data.aiStatus !== "not-used",
+      aiDerived: parsed.data.sourceNoteProvenance !== undefined ? !validProvenance?.some((item) => item.headingIndex === headingIndex && item.heading === textOf(node).trim() && item.page === position && item.provenance === "source") : parsed.data.aiStatus !== "not-used",
       text: normalize(text),
     });
     if (result.length >= 60) break;
@@ -107,7 +115,7 @@ async function readCandidates(root: string, artifact: "course" | "notes", extens
   } catch { return []; }
 }
 
-async function sourceTexts(sourcePath: string, positions: number[]): Promise<Map<number, string>> {
+async function sourceTexts(sourcePath: string, positions: number[]): Promise<Map<number, string[]>> {
   const extension = path.extname(sourcePath);
   const details = await lstat(sourcePath);
   if (!details.isFile() || details.isSymbolicLink() || details.size > limits[extension] * 1024 * 1024) return new Map();
@@ -116,14 +124,14 @@ async function sourceTexts(sourcePath: string, positions: number[]): Promise<Map
     const extracted = extension === ".docx" ? await extractDocx(bytes, path.basename(sourcePath))
       : /\.html?$/.test(extension) ? await extractHtml(bytes, path.basename(sourcePath))
         : await extractText(bytes, path.basename(sourcePath));
-    return new Map(extracted.pages.filter((page) => positions.includes(page.page)).map((page) => [page.page, normalize(page.text)]));
+    return new Map(extracted.pages.filter((page) => positions.includes(page.page)).map((page) => [page.page, [normalize(page.text)]]));
   }
   if (bytes.subarray(0, 5).toString("ascii") !== "%PDF-") return new Map();
   const task = getDocument({ data: new Uint8Array(bytes), useSystemFonts: true });
   try {
     const document = await task.promise;
     if (document.numPages > 1000) return new Map();
-    const texts = new Map<number, string>();
+    const texts = new Map<number, string[]>();
     // Only read distinct pages referenced by generated markers, never scan
     // the whole PDF merely to display a source card.
     for (const position of new Set(positions)) {
@@ -131,7 +139,12 @@ async function sourceTexts(sourcePath: string, positions: number[]): Promise<Map
       const page = await document.getPage(position);
       try {
         const content = await page.getTextContent();
-        texts.set(position, normalize(content.items.flatMap((item) => "str" in item ? [item.str] : []).join(" ")));
+        // Verify either the current layout order or the legacy stream order,
+        // never a concatenation that could substantiate invented mixed text.
+        texts.set(position, [
+          normalize(readPdfPageText(content.items, page.view[2] - page.view[0]).text),
+          normalize(content.items.flatMap((item) => "str" in item ? [item.str] : []).join(" ")),
+        ]);
       } finally { page.cleanup(); }
     }
     return texts;
@@ -145,7 +158,7 @@ export async function readSourceReferences(repository: WorkspaceRepository, impo
   const extension = path.extname(sourcePath);
   const references = (await Promise.all((["course", "notes"] as const).map((artifact) => readCandidates(root, artifact, extension, courseId)))).flat();
   if (!references.length) return [];
-  let texts: Map<number, string>;
+  let texts: Map<number, string[]>;
   try { texts = await sourceTexts(sourcePath, references.map((reference) => reference.position)); }
   catch { return []; } // Changed, unreadable or corrupt sources cannot substantiate a reference.
   return references.flatMap(({ text, ...reference }) => {
@@ -157,7 +170,7 @@ export async function readSourceReferences(repository: WorkspaceRepository, impo
       sourceUrl: `/api/courses/${encodeURIComponent(courseId)}/source${kind === "pdf-page" ? `#page=${reference.position}` : ""}`,
       // Verify the entire candidate before truncating; a matching prefix must
       // not hide an invented continuation beyond the 500-character limit.
-      verifiedExcerpt: !reference.aiDerived && text && extracted.includes(text) ? text.slice(0, 500) : null,
+      verifiedExcerpt: !reference.aiDerived && text && extracted.some((variant) => variant.includes(text)) ? text.slice(0, 500) : null,
     } satisfies SourceReference];
   });
 }

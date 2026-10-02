@@ -912,7 +912,6 @@ input:focus-visible {
 
 .source-reference { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 10px 0 18px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; padding: 9px 12px; color: var(--text-secondary); background: var(--surface-active); font-size: 12px; line-height: 1.6; }
 .source-reference__label { color: var(--ink); font-weight: 700; }
-.source-reference__pending { color: var(--warning); }
 .source-reference p { flex-basis: 100%; margin: 0; color: var(--ink-secondary); overflow-wrap: anywhere; }
 .source-reference a { margin-left: auto; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 
@@ -1518,6 +1517,17 @@ input:focus-visible {
 .data-management-actions button:hover,
 .data-management-actions .import-label:hover { border-color: var(--accent); color: var(--accent); }
 .data-management-actions .import-label input[type="file"] { display: none; }
+.course-backup-panel { min-width: 0; }
+.course-backup-panel label { display: grid; gap: 8px; margin: 14px 0; }
+.course-backup-panel select, .course-backup-panel input { max-width: 100%; min-width: 0; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px; font: inherit; }
+.course-backup-panel button { padding: 9px 14px; margin: 8px 8px 8px 0; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.course-backup-panel button:disabled { opacity: .55; cursor: not-allowed; }
+.course-backup-panel p, .course-backup-panel code, .course-backup-panel a { overflow-wrap: anywhere; }
+.course-backup-panel code { display: block; margin-top: 6px; }
+.course-backup-panel .backup-preview { margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+.course-backup-panel .backup-preview ul { padding-left: 22px; }
+.course-backup-panel .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
+@media (prefers-reduced-motion: reduce) { .course-backup-panel .loading-spinner { animation: none; } }
 .import-success-banner { display: flex; align-items: center; gap: 10px; padding: 14px 18px; margin: 16px 0; border-radius: 8px; background: #e8f5e9; border: 1px solid #4caf50; color: #2e7d32; font-weight: 500; }
 .import-success-banner svg { flex-shrink: 0; }
 .theme-toggle { display: flex; gap: 8px; margin: 12px 0; }
@@ -1836,3 +1846,16 @@ input:focus-visible {
 [data-theme="dark"] .severity-badge--high { background: var(--warning-bg); color: var(--warning); }
 [data-theme="dark"] .severity-badge--medium { background: rgba(230, 126, 34, 0.15); color: #e67e22; }
 [data-theme="dark"] .severity-badge--low { background: var(--accent-bg); color: var(--accent-light); }
+
+.import-quality-pages { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-block: 1rem; }
+.import-quality-pages a { padding: 0.3rem 0.6rem; border: 1px solid var(--line); border-radius: 0.3rem; color: var(--accent); }
+.import-quality .import-actions { flex-wrap: wrap; }
+.import-recovery-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem; padding-block: 0.8rem; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.import-ai fieldset { display: grid; gap: 0.6rem; border: 1px solid var(--line); margin-block: 1rem; min-width: 0; }
+.import-ai-excerpt pre, .import-ai-comparison pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; font-family: inherit; }
+.import-ai-comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
+.import-ai-comparison > div { min-width: 0; padding: 0.8rem; border: 1px solid var(--line); }
+.import-ai-comparison h5 { margin-top: 0; }
+.import-ai-candidates article { padding-block: 1rem; border-top: 1px solid var(--line); }
+.import-ai-actions { flex-wrap: wrap; }
+@media (max-width: 700px) { .import-ai-comparison { grid-template-columns: minmax(0, 1fr); } }

@@ -5,13 +5,14 @@ import path from "node:path";
 
 import JSZip from "jszip";
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "./app.js";
 import { CourseEventBus } from "./course-events.js";
 import { buildCourseFiles, createBasicDraft } from "./course-import.js";
 import { CourseImportManager } from "./course-import-manager.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
+import { positionedPdf } from "../test/pdf-fixtures.js";
 
 const roots: string[] = [];
 const managers: CourseImportManager[] = [];
@@ -30,7 +31,7 @@ async function setup() {
   const app = createApp(repository, events, undefined, manager);
   const importFile = async (bytes: Uint8Array, filename: string) => {
     const draft = await manager.create(bytes, filename);
-    await manager.confirm(draft.id);
+    await manager.confirm(draft.id, draft.revision);
     const courseRoot = repository.config.courses.find((course) => course.id === draft.courseId)!.root;
     return { ...draft, courseRoot, url: `/api/courses/${draft.courseId}/source-references` };
   };
@@ -70,6 +71,63 @@ async function docx() {
 }
 
 describe("trustworthy source reference HTTP API", () => {
+  it("verifies untouched source notes after partially applying AI suggestions", async () => {
+    const { manager, app } = await setup();
+    const draft = await manager.create(pdf(["Chapter 1 Source", "Chapter 2 Source"]), "mixed.pdf");
+    manager.setAiEnricher(async (excerpt) => excerpt.stageIds.map((stageId) => ({ stageId, title: "AI chapter", tasks: ["Read"], notes: [{ title: "AI note", page: 1, content: "Chapter 1 Source" }] })));
+    const excerpt = await manager.aiExcerpt(draft.id, { expectedRevision: 0, stageIds: [draft.draft.stages[0].id!] });
+    const operation = await manager.startAi(draft.id, { consent: true, expectedRevision: 0, stageIds: excerpt.stageIds, excerptHash: excerpt.excerptHash });
+    await vi.waitFor(async () => expect((await manager.getAi(draft.id, operation.id)).status).toBe("complete"), { timeout: 5000 });
+    const preview = await manager.preview(draft.id);
+    const applied = await manager.applyAi(draft.id, preview.candidate!.id, { expectedRevision: 0, acceptedStageIds: excerpt.stageIds });
+    await manager.confirm(draft.id, applied.revision);
+    const response = await request(app).get(`/api/courses/${draft.courseId}/source-references`).expect(200);
+    expect(response.body.filter((item: { heading: string }) => item.heading === "Chapter 2 Source")).toEqual(expect.arrayContaining([expect.objectContaining({ aiDerived: false, verifiedExcerpt: "Chapter 2 Source" })]));
+    expect(response.body.filter((item: { heading: string }) => item.heading === "AI note")).toEqual(expect.arrayContaining([expect.objectContaining({ aiDerived: true, verifiedExcerpt: null })]));
+  });
+  it("verifies safely fenced multiline PDF excerpts using the same reading order as import", async () => {
+    const { app, importFile } = await setup();
+    const course = await importFile(positionedPdf([
+      { text: "Second paragraph", x: 50, y: 650 },
+      { text: "Chapter 1 Reading", x: 50, y: 750 },
+      { text: "continued", x: 50, y: 734 },
+    ]), "reading.pdf");
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body).toHaveLength(2);
+    for (const item of response.body) expect(item).toMatchObject({ heading: "Chapter 1 Reading", position: 1, verifiedExcerpt: "Chapter 1 Reading continued Second paragraph" });
+    expect(await readFile(path.join(course.courseRoot, "notes.md"), "utf8")).toContain("Chapter 1 Reading\ncontinued\n\nSecond paragraph");
+  });
+
+  it("still verifies legacy PDF stream-order excerpts after reading-order optimization", async () => {
+    const { app, importFile } = await setup();
+    const course = await importFile(positionedPdf([
+      { text: "Second paragraph", x: 50, y: 650 },
+      { text: "Chapter 1 Reading", x: 50, y: 750 },
+    ]), "legacy.pdf");
+    await writeFile(path.join(course.courseRoot, "notes.md"), `---\ncourseId: ${course.courseId}\naiStatus: not-used\nsourceExcerptEncoding: escaped-line-v1\n---\n## Legacy\n\n来源：原 PDF 第 1 页。\n\nSecond paragraph Chapter 1 Reading\n`);
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body.find((item: { artifact: string }) => item.artifact === "notes").verifiedExcerpt).toBe("Second paragraph Chapter 1 Reading");
+  });
+
+  it("does not verify fabricated text crossing two possible PDF reading orders", async () => {
+    const { app, importFile } = await setup();
+    const course = await importFile(positionedPdf([
+      { text: "Second paragraph", x: 50, y: 650 },
+      { text: "Chapter 1 Reading", x: 50, y: 750 },
+    ]), "mixed.pdf");
+    await writeFile(path.join(course.courseRoot, "notes.md"), `---\ncourseId: ${course.courseId}\naiStatus: not-used\nsourceExcerptEncoding: fenced-text-v2\n---\n## Changed\n\n来源：原 PDF 第 1 页。\n\n\`\`\`text\nSecond paragraph Second paragraph\n\`\`\`\n`);
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body.find((item: { artifact: string }) => item.artifact === "notes").verifiedExcerpt).toBeNull();
+  });
+
+  it("does not decode an arbitrary paragraph labeled as a fenced PDF excerpt", async () => {
+    const { app, importFile } = await setup();
+    const course = await importFile(pdf(["Chapter 1 Reading"]), "unfenced.pdf");
+    await writeFile(path.join(course.courseRoot, "notes.md"), `---\ncourseId: ${course.courseId}\naiStatus: not-used\nsourceExcerptEncoding: fenced-text-v2\n---\n## Changed\n\n来源：原 PDF 第 1 页。\n\nChapter 1 Reading\n`);
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body.find((item: { artifact: string }) => item.artifact === "notes").verifiedExcerpt).toBeNull();
+  });
+
   it("links the actual PDF page and verifies only the text on that page", async () => {
     const { app, importFile } = await setup();
     const course = await importFile(pdf(["Chapter 1 Limits", "Chapter 2 Derivatives"]), "course.pdf");
@@ -108,10 +166,14 @@ describe("trustworthy source reference HTTP API", () => {
 
   it("never verifies AI-derived text even when it exactly matches the source", async () => {
     const { app, manager } = await setup();
-    manager.setAiEnricher(async () => ({ stages: [{ title: "AI stage", tasks: ["Read"] }], notes: [{ title: "AI note", page: 1, content: "Source text content here." }] }));
-    const draft = await manager.create(Buffer.from("Source text content here."), "course.txt");
-    await manager.enrich(draft.id, true);
-    await manager.confirm(draft.id);
+    manager.setAiEnricher(async (excerpt) => excerpt.stageIds.map((stageId) => ({ stageId, title: "AI stage", tasks: ["Read"], notes: [{ title: "AI note", page: 1, content: "Source text content here." }] })));
+    const draft = await manager.create(Buffer.from("# Source chapter\nSource text content here."), "course.txt");
+    const excerpt = await manager.aiExcerpt(draft.id, { expectedRevision: 0, stageIds: [draft.draft.stages[0].id!] });
+    const operation = await manager.startAi(draft.id, { consent: true, expectedRevision: 0, stageIds: excerpt.stageIds, excerptHash: excerpt.excerptHash });
+    await vi.waitFor(async () => expect((await manager.getAi(draft.id, operation.id)).status).toBe("complete"));
+    const preview = await manager.preview(draft.id);
+    await manager.applyAi(draft.id, preview.candidate!.id, { expectedRevision: 0, acceptedStageIds: excerpt.stageIds });
+    await manager.confirm(draft.id, (await manager.preview(draft.id)).revision);
     const response = await request(app).get(`/api/courses/${draft.courseId}/source-references`).expect(200);
     expect(response.body).toHaveLength(2);
     for (const reference of response.body) expect(reference).toMatchObject({ aiDerived: true, verifiedExcerpt: null });
@@ -122,11 +184,21 @@ describe("trustworthy source reference HTTP API", () => {
     const course = await importFile(Buffer.from("Source text content here."), "course.txt");
     for (const artifact of ["course.md", "notes.md"]) {
       const file = path.join(course.courseRoot, artifact);
-      await writeFile(file, (await readFile(file, "utf8")).replace("aiStatus: not-used\n", status === "missing" ? "" : "aiStatus: failed\n"));
+      await writeFile(file, (await readFile(file, "utf8")).replace(/^sourceNoteProvenance:.*\n/m, "").replace("aiStatus: not-used\n", status === "missing" ? "" : "aiStatus: failed\n"));
     }
     const response = await request(app).get(course.url).expect(200);
     expect(response.body).toHaveLength(2);
     for (const reference of response.body) expect(reference).toMatchObject({ aiDerived: true, verifiedExcerpt: null });
+  });
+
+  it("does not let forged source metadata verify text absent from the physical page", async () => {
+    const { app, importFile } = await setup();
+    const course = await importFile(pdf(["Chapter 1 Original"]), "forged.pdf");
+    const filename = path.join(course.courseRoot, "notes.md");
+    const original = await readFile(filename, "utf8");
+    await writeFile(filename, original.replace("\nChapter 1 Original\n```", "\nInvented knowledge\n```"));
+    const response = await request(app).get(course.url).expect(200);
+    expect(response.body.find((item: { artifact: string }) => item.artifact === "notes")).toMatchObject({ aiDerived: false, verifiedExcerpt: null });
   });
 
   it("does not verify text found only on a different PDF page or expose an out-of-range page", async () => {

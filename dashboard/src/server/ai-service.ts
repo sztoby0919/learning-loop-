@@ -2,6 +2,7 @@
 // 提供统一的 AI 功能接口，处理错误、重试、日志
 
 import type { AiProvider } from "./ai-provider.js";
+import { AI_TIMEOUT_MS, AiRequestError, aiTimeoutError, abortableDelay } from "./ai-request.js";
 import type {
   AiConfig,
   AiRunRecord,
@@ -26,7 +27,7 @@ export class AiService {
   constructor(config: AiServiceConfig) {
     this.provider = config.provider;
     this.maxRetries = config.maxRetries ?? 1;
-    this.timeoutMs = config.timeoutMs ?? 90000;
+    this.timeoutMs = config.timeoutMs ?? AI_TIMEOUT_MS;
   }
 
   // 生成诊断题目
@@ -37,14 +38,14 @@ export class AiService {
     difficulty?: string;
     context: string;
   }): Promise<AssessmentQuestion[]> {
-    return this.withRetry(() =>
+    return this.withRetry((signal) =>
       this.provider.generateQuestions({
         courseId: params.courseId,
         topic: params.topic,
         count: params.count ?? 5,
         difficulty: params.difficulty ?? "medium",
         context: params.context,
-      }),
+      }, signal),
     );
   }
 
@@ -54,12 +55,12 @@ export class AiService {
     answer: string;
     context: string;
   }): Promise<AnswerFeedback> {
-    return this.withRetry(() =>
+    return this.withRetry((signal) =>
       this.provider.submitAnswer({
         question: params.question,
         answer: params.answer,
         context: params.context,
-      }),
+      }, signal),
     );
   }
 
@@ -69,12 +70,12 @@ export class AiService {
     answers: Array<{ question: AssessmentQuestion; answer: string; feedback: AnswerFeedback }>;
     learningRecords: LearningRecord[];
   }): Promise<DiagnosisResult> {
-    return this.withRetry(() =>
+    return this.withRetry((signal) =>
       this.provider.generateDiagnosis({
         courseId: params.courseId,
         answers: params.answers,
         learningRecords: params.learningRecords,
-      }),
+      }, signal),
     );
   }
 
@@ -84,12 +85,12 @@ export class AiService {
     level?: string;
     context: string;
   }): Promise<{ explanation: string; analogy: string; examples: string[] }> {
-    return this.withRetry(() =>
+    return this.withRetry((signal) =>
       this.provider.generateFeynmanExplanation({
         concept: params.concept,
         level: params.level ?? "intermediate",
         context: params.context,
-      }),
+      }, signal),
     );
   }
 
@@ -98,32 +99,35 @@ export class AiService {
     weakPoints: DiagnosisResult["weakPoints"];
     currentLevel: string;
   }): Promise<string[]> {
-    return this.withRetry(() =>
+    return this.withRetry((signal) =>
       this.provider.generateRemediationTasks({
         weakPoints: params.weakPoints,
         currentLevel: params.currentLevel,
-      }),
+      }, signal),
     );
   }
 
   // 带重试的包装器
-  private async withRetry<T>(fn: () => Promise<T>, attempt = 0): Promise<T> {
-    try {
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("请求超时")), this.timeoutMs),
-      );
-      return await Promise.race([fn(), timeoutPromise]);
-    } catch (error) {
-      if (attempt < this.maxRetries) {
-        await this.delay(1000 * (attempt + 1));
-        return this.withRetry(fn, attempt + 1);
+  private async withRetry<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { const error = aiTimeoutError(); controller.abort(error); reject(error); }, this.timeoutMs);
+    });
+    const run = async () => {
+      for (let attempt = 0; ; attempt++) {
+        controller.signal.throwIfAborted();
+        try { return await fn(controller.signal); }
+        catch (cause) {
+          const error = cause && typeof cause === "object" && "name" in cause && cause.name === "TimeoutError" ? aiTimeoutError() : cause;
+          if (controller.signal.aborted) throw controller.signal.reason;
+          if (!(error instanceof AiRequestError) || !error.retryable || attempt >= this.maxRetries) throw error;
+          await abortableDelay(1000, controller.signal);
+        }
       }
-      throw error instanceof Error ? error : new Error(String(error));
-    }
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    };
+    try { return await Promise.race([run(), timeout]); }
+    finally { clearTimeout(timer!); }
   }
 
   getRunRecords(): AiRunRecord[] {

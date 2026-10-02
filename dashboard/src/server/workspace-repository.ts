@@ -51,6 +51,48 @@ export class WorkspaceRepository {
     await Promise.all((["course", "notes", "reviews", "resources", "schedule", "sessions"] as ArtifactKind[]).map((kind) => this.refresh(course.id, kind)));
   }
 
+  async addCourses(courses: ConfiguredCourse[], snapshots?: Map<string, Record<string, string>>): Promise<void> {
+    const ids = new Set(this.config.courses.map((course) => course.id));
+    const roots = new Set(this.config.courses.map((course) => path.resolve(course.root).toLowerCase()));
+    for (const course of courses) {
+      const root = path.resolve(course.root).toLowerCase();
+      if (ids.has(course.id) || roots.has(root)) throw new Error("课程已存在");
+      ids.add(course.id); roots.add(root);
+      const raw = snapshots ? snapshots.get(course.id)?.["course.md"] : await readFile(path.join(course.root, "course.md"), "utf8");
+      if (!raw || parseCourseMarkdown(raw, course.root).id !== course.id) throw new Error("课程 ID 不一致");
+    }
+    this.config.courses.push(...courses);
+    try {
+      if (snapshots) for (const course of courses) this.cacheVerifiedSnapshot(course, snapshots.get(course.id)!);
+      else await Promise.all(courses.flatMap((course) => (["course", "notes", "reviews", "resources", "schedule", "sessions"] as ArtifactKind[]).map((kind) => this.refresh(course.id, kind))));
+    } catch (error) { this.removeCourses(courses); throw error; }
+  }
+
+  private cacheVerifiedSnapshot(course: ConfiguredCourse, files: Record<string, string>): void {
+    const sourcePath = artifactPath(course.root, "course"); const parsed = parseCourseMarkdown(files["course.md"], sourcePath);
+    this.courseCache.set(course.id, parsed);
+    this.health.set(`${course.id}:course`, { artifact: "course", status: "ready", sourcePath, updated: parsed.updated });
+    for (const artifact of ["notes", "reviews", "resources", "schedule"] as const) {
+      const sourcePath = artifactPath(course.root, artifact); const raw = files[`${artifact}.md`]; const key = `${course.id}:${artifact}`;
+      if (raw === undefined) { this.health.set(key, { artifact, status: "missing", sourcePath, updated: null }); continue; }
+      const value = { notes: () => parseNotesMarkdown(raw, sourcePath), reviews: () => parseReviewsMarkdown(raw, sourcePath, this.today()), resources: () => parseResourcesMarkdown(raw, sourcePath), schedule: () => parseScheduleMarkdown(raw, sourcePath) }[artifact]();
+      if (value.courseId !== course.id) throw new Error("课程档案关联不一致");
+      this.artifactCache.set(key, value); this.health.set(key, { artifact, status: "ready", sourcePath, updated: value.updated });
+    }
+    this.health.set(`${course.id}:sessions`, { artifact: "sessions", status: "ready", sourcePath: artifactPath(course.root, "sessions"), updated: null, count: Object.keys(files).filter((name) => name.startsWith("sessions/")).length });
+  }
+
+  removeCourses(courses: ConfiguredCourse[]): void {
+    for (const course of courses) {
+      const index = this.config.courses.findIndex((entry) => entry.id === course.id && entry.root === course.root);
+      if (index < 0) continue;
+      this.config.courses.splice(index, 1);
+      this.courseCache.delete(course.id);
+      for (const key of [...this.artifactCache.keys()]) if (key.startsWith(`${course.id}:`)) this.artifactCache.delete(key);
+      for (const key of [...this.health.keys()]) if (key.startsWith(`${course.id}:`)) this.health.delete(key);
+    }
+  }
+
   private configured(id: CourseId) {
     return this.config.courses.find((course) => course.id === id);
   }

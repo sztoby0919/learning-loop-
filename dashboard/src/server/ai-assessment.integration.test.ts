@@ -5,13 +5,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AiProvider } from "./ai-provider.js";
 import { AiService } from "./ai-service.js";
 import { createApp } from "./app.js";
 import { CourseEventBus } from "./course-events.js";
-import { AiResponseFormatError } from "./openai-compatible-provider.js";
+import { AiResponseFormatError, OpenAiCompatibleProvider } from "./openai-compatible-provider.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 
 const courseMarkdown = `---
@@ -185,6 +185,22 @@ describe("AI assessment API", () => {
     const { app } = await setup({ ...provider, generateDiagnosis: async () => ({ ...(await provider.generateDiagnosis({ courseId: "calculus-101", answers: [], learningRecords: [] })), nextReviewDate: "tomorrow" }) });
     const { assessmentId } = await startAndAnswer(app);
     expect((await request(app).get(`/api/ai/assessments/${assessmentId}/proposal`)).status).toBe(502);
+  });
+
+  it("returns a specific gateway timeout instead of the generic request failure", async () => {
+    const { app } = await setup({ ...provider, generateQuestions: async () => { throw new DOMException("timed out", "TimeoutError"); } });
+    const result = await request(app).post("/api/ai/assessments").send({ courseId: "calculus-101" });
+    expect(result.status).toBe(504);
+    expect(result.body.error).toContain("超时");
+  });
+  it("returns a safe 502 when a successful upstream HTTP response is missing model text", async () => {
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ choices: [] }) }));
+    try {
+      const aiProvider = new OpenAiCompatibleProvider({ baseUrl: "https://example.invalid/v1", apiKey: "private-test-key", model: "test", maxTokens: 2000, temperature: 0.2 });
+      const { app } = await setup(aiProvider);
+      const result = await request(app).post("/api/ai/assessments").send({ courseId: "calculus-101" });
+      expect(result.status).toBe(502); expect(result.body.error).toContain("格式"); expect(result.body.error).not.toContain("private-test-key");
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("explains an unsupported review table instead of hiding the report error", async () => {

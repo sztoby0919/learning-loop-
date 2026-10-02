@@ -11,6 +11,42 @@ const question = { id: "q1", question: "导数表示什么？", options: ["平�
 afterEach(() => vi.unstubAllGlobals());
 
 describe("OpenAiCompatibleProvider", () => {
+  it.each([
+    ["unlabeled code fence", "```\n", "\n```"],
+    ["JSON fence with Windows line endings", "```JSON\r\n", "\r\n```"],
+    ["surrounding explanation", "以下是题目：\n", "\n以上是题目。"],
+  ])("accepts a complete question array inside %s", async (_name, prefix, suffix) => {
+    const content = prefix + JSON.stringify([question]) + suffix;
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }));
+    const result = await new OpenAiCompatibleProvider(config).generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "课程内容" });
+    expect(result).toEqual([question]);
+  });
+
+  it("preserves JSON delimiters and escaped quotes inside wrapped question text", async () => {
+    const text = '区分 [a,b] 与 {x}，并解释 "导数"。';
+    const content = "以下是题目：\n" + JSON.stringify([{ ...question, question: text }]) + "\n结束。";
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }));
+    const result = await new OpenAiCompatibleProvider(config).generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "课程内容" });
+    expect(result).toEqual([{ ...question, question: text }]);
+  });
+
+  it("still rejects an invalid answer in a wrapped question array", async () => {
+    const content = "题目：\n```\n" + JSON.stringify([{ ...question, answer: "E" }]) + "\n```";
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }));
+    await expect(new OpenAiCompatibleProvider(config).generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "课程内容" })).rejects.toThrow(/answer/);
+  });
+
+  it("does not salvage a nested object from a truncated wrapped array", async () => {
+    const content = "题目：\n[" + JSON.stringify(question);
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }));
+    await expect(new OpenAiCompatibleProvider(config).generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "课程内容" })).rejects.toBeInstanceOf(AiResponseFormatError);
+  });
+
+  it("classifies a missing completion envelope as a safe model-format error", async () => {
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ choices: [] }) }));
+    const provider = new OpenAiCompatibleProvider(config);
+    await expect(provider.generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "课程内容" })).rejects.toBeInstanceOf(AiResponseFormatError);
+  });
   it("accepts numeric model question IDs but returns stable string IDs", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify([{ ...question, id: 1 }]) } }] }) })));
     const questions = await new OpenAiCompatibleProvider(config).generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "导数是瞬时变化率" });

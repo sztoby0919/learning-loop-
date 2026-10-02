@@ -24,7 +24,6 @@ export function SourceReference({ reference }: { reference: SourceReferenceData 
     <aside className="source-reference" aria-label={`来源：${reference.heading}`}>
       <span className="source-reference__label">来源</span>
       <span>{position}</span>
-      {reference.aiDerived && <span className="source-reference__pending">待核对</span>}
       {excerpt && <p>原文摘录：{excerpt}</p>}
       <a href={reference.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`打开原文件：${reference.heading}`}>打开原文件</a>
     </aside>

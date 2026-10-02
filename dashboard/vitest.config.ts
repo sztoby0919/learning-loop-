@@ -7,5 +7,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // Bound concurrent PDF/DOM workers so Windows file-backed lifecycle tests remain stable.
+    maxWorkers: 4,
   },
 });

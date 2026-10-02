@@ -10,6 +10,7 @@ import { createApp } from "../../src/server/app.js";
 import { CourseEventBus } from "../../src/server/course-events.js";
 import { CourseImportManager } from "../../src/server/course-import-manager.js";
 import { WorkspaceRepository } from "../../src/server/workspace-repository.js";
+import { positionedPdf } from "../../src/test/pdf-fixtures.js";
 
 function textPdf(text: string): Uint8Array {
   const stream = `BT /F1 18 Tf 50 750 Td (${text}) Tj ET`;
@@ -38,7 +39,7 @@ async function managedSourceServer() {
   const events = new CourseEventBus();
   const imports = new CourseImportManager({
     root, repository, events, watchCourse: () => {}, today,
-    aiEnricher: async (_excerpt, draft) => ({ stages: draft.stages, notes: draft.notes }),
+    aiEnricher: async (excerpt, draft) => excerpt.stageIds.map((stageId) => { const stage = draft.stages.find((stage) => stage.id === stageId)!; return { stageId, title: stage.title, tasks: stage.tasks, notes: draft.notes.filter((note) => note.stageId === stageId).map((note) => ({ ...note, provenance: "ai" as const })) }; }),
   });
   let server: Server | undefined;
   const cleanup = async () => {
@@ -56,15 +57,25 @@ async function managedSourceServer() {
 
   try {
     const pdfDraft = await imports.create(textPdf("Chapter 1 Limits"), "real-source.pdf");
-    await imports.confirm(pdfDraft.id);
+    await imports.confirm(pdfDraft.id, pdfDraft.revision);
     const textDraft = await imports.create(new TextEncoder().encode("# Text chapter\nSource text content here."), "real-source.txt");
-    await imports.enrich(textDraft.id, true);
-    await imports.confirm(textDraft.id);
+    const excerpt = await imports.aiExcerpt(textDraft.id, { expectedRevision: textDraft.revision, stageIds: [textDraft.draft.stages[0].id!] });
+    const operation = await imports.startAi(textDraft.id, { consent: true, expectedRevision: excerpt.revision, stageIds: excerpt.stageIds, excerptHash: excerpt.excerptHash });
+    await expect.poll(async () => (await imports.getAi(textDraft.id, operation.id)).status).toBe("complete");
+    const candidate = (await imports.preview(textDraft.id)).candidate!;
+    await imports.applyAi(textDraft.id, candidate.id, { expectedRevision: candidate.baseRevision, acceptedStageIds: excerpt.stageIds });
+    await imports.confirm(textDraft.id, (await imports.preview(textDraft.id)).revision);
+    const layoutDraft = await imports.create(positionedPdf([
+      { text: "Second paragraph", x: 50, y: 650 },
+      { text: "Chapter 1 Layout", x: 50, y: 750 },
+      { text: "x_i = y^2 + ?", x: 50, y: 700 },
+    ]), "layout-source.pdf");
+    await imports.confirm(layoutDraft.id, layoutDraft.revision);
     server = createApp(repository, events, undefined, imports).listen(0, "127.0.0.1");
     await once(server, "listening");
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Temporary source server has no TCP address");
-    return { origin: `http://127.0.0.1:${address.port}`, pdfId: pdfDraft.courseId, textId: textDraft.courseId, cleanup };
+    return { origin: `http://127.0.0.1:${address.port}`, pdfId: pdfDraft.courseId, textId: textDraft.courseId, layoutId: layoutDraft.courseId, cleanup };
   } catch (error) {
     await cleanup();
     throw error;
@@ -77,7 +88,22 @@ test("手工课程的真实空引用响应不显示失效来源入口", async ({
   await expect(page.getByRole("link", { name: /打开原文件/ })).toHaveCount(0);
 });
 
-test("真实受管 PDF 可经键盘打开，文本估算位置与 AI 待核对来自真实接口", async ({ page }) => {
+test("PDF 多行摘录保留为纯文本并可打开原页，不把损坏公式渲染为数学结果", async ({ page }) => {
+  const fixture = await managedSourceServer();
+  try {
+    await page.goto(`${fixture.origin}/notes/${fixture.layoutId}`);
+    const excerpt = page.locator(".markdown-content pre code").first();
+    await expect(excerpt).toHaveText(/^Chapter 1 Layout\n\nx_i = y\^2 \+ \?\n\nSecond paragraph\n$/);
+    await expect(page.locator(".katex")).toHaveCount(0);
+    await expect(page.getByText("待核对")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "打开原文件：Chapter 1 Layout" })).toHaveAttribute("href", `/api/courses/${fixture.layoutId}/source#page=1`);
+    const response = await page.request.get(`${fixture.origin}/api/courses/${fixture.layoutId}/source-references`);
+    expect((await response.json()).find((item: { artifact: string }) => item.artifact === "notes")).toMatchObject({ verifiedExcerpt: "Chapter 1 Layout x_i = y^2 + ? Second paragraph" });
+    await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
+  } finally { await fixture.cleanup(); }
+});
+
+test("真实受管 PDF 可经键盘打开，AI 来源不显示待核对标识", async ({ page }) => {
   const fixture = await managedSourceServer();
   try {
     const pdfReferences = await page.request.get(`${fixture.origin}/api/courses/${fixture.pdfId}/source-references`);
@@ -110,7 +136,7 @@ test("真实受管 PDF 可经键盘打开，文本估算位置与 AI 待核对�
 
     await page.goto(`${fixture.origin}/notes/${fixture.textId}`);
     await expect(page.locator(".source-reference").getByText("第 1 段文本（估算位置）", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("待核对").first()).toBeVisible();
+    await expect(page.getByText("待核对")).toHaveCount(0);
     await expect(page.getByText(/原文摘录/)).toHaveCount(0);
     const textLink = page.getByRole("link", { name: /打开原文件/ }).first();
     await expect(textLink).toHaveAttribute("href", `/api/courses/${fixture.textId}/source`);

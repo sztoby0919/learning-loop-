@@ -25,11 +25,13 @@ test("PDF upload shows an editable preview and can be cancelled without creating
   await page.getByRole("link", { name: "从文档/HTML 创建课程" }).click();
   await page.getByLabel("选择文件").setInputFiles({ name: "limits.pdf", mimeType: "application/pdf", buffer: textPdf() });
   await expect(page.getByLabel("课程名称")).toHaveValue("limits");
-  await expect(page.getByText("公式、表格和图片可能无法从 PDF 文字层准确提取，请对照原文核查。")).toBeVisible();
+  await expect(page.getByText(/公式、表格和图片可能无法从 PDF 文字层准确提取/)).toBeVisible();
+  await expect(page.getByText(/文字摘录不是已还原的公式或结构化表格/)).toBeVisible();
   await page.getByLabel("课程名称").fill("我的极限课程");
   await page.getByRole("button", { name: "更新预览" }).click();
   await page.locator(".import-preview details").first().evaluate((element) => { (element as HTMLDetailsElement).open = true; });
   await expect(page.locator(".import-preview pre").first()).toContainText("我的极限课程");
+  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "取消导入" }).click();
   await expect(page).toHaveURL(/\/courses$/);
   await expect(page.getByText("我的极限课程")).toHaveCount(0);

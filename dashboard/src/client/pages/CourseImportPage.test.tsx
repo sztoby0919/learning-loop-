@@ -1,16 +1,18 @@
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { createMemoryRouter, Link, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CourseImportPage } from "./CourseImportPage.js";
 
-const first = { id: "draft-1", courseId: "course-123", draft: { title: "微积分", originalFilename: "course.pdf", pageCount: 10, goal: "", weeklyHours: null, stages: [{ title: "第一章", tasks: ["阅读第 1 页"] }], notes: [], warnings: ["请核对公式"], aiStatus: "not-used", sourceFormat: "pdf" }, files: { "course.md": "# 微积分", "notes.md": "# 笔记" }, aiAvailable: true, excerptChars: 1200 };
+const firstId = "11111111-1111-4111-8111-111111111111";
+const first = { id: "draft-1", courseId: "course-123", revision: 0, draft: { title: "微积分", originalFilename: "course.pdf", pageCount: 10, goal: "", weeklyHours: null, stages: [{ id: firstId, title: "第一章", tasks: ["阅读第 1 页"], source: { title: "第一章", startPage: 1, endPage: 10 } }], notes: [], warnings: ["请核对公式"], aiStatus: "not-used", sourceFormat: "pdf" }, files: { "course.md": "# 微积分", "notes.md": "# 笔记" }, aiAvailable: true, excerptChars: 1200 };
+const firstExcerpt = { revision: 0, stageIds: [firstId], excerptHash: "a".repeat(64), text: "实际摘录", chars: 4, pages: [{ stageId: firstId, page: 1, text: "实际摘录" }] };
 const docxPreview = { id: "draft-2", courseId: "course-456", draft: { title: "线性代数", originalFilename: "大纲.docx", pageCount: 5, goal: "", weeklyHours: null, stages: [{ title: "第一章", tasks: ["阅读第 1 页"] }], notes: [], warnings: ["Word 文档转换警告"], aiStatus: "not-used", sourceFormat: "docx" }, files: { "course.md": "# 线性代数", "notes.md": "# 笔记" }, aiAvailable: false, excerptChars: 800 };
 const textPreview = { id: "draft-3", courseId: "course-789", draft: { title: "算法笔记", originalFilename: "notes.md", pageCount: 3, goal: "", weeklyHours: null, stages: [{ title: "排序", tasks: ["学习快速排序"] }], notes: [], warnings: ["未检测到 Markdown 标题"], aiStatus: "not-used", sourceFormat: "text" }, files: { "course.md": "# 算法笔记", "notes.md": "# 笔记" }, aiAvailable: false, excerptChars: 500 };
 const htmlPreview = { id: "draft-4", courseId: "course-abc", draft: { title: "网页教程", originalFilename: "tutorial.html", pageCount: 2, goal: "", weeklyHours: null, stages: [{ title: "第一章", tasks: ["学习基础"] }], notes: [], warnings: [], aiStatus: "not-used", sourceFormat: "text" }, files: { "course.md": "# 网页教程", "notes.md": "# 笔记" }, aiAvailable: false, excerptChars: 600 };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function mockUpload(preview: unknown, responses?: Array<{ status: number; body: unknown }>) {
   const attempts: File[] = [];
@@ -33,12 +35,79 @@ function mockUpload(preview: unknown, responses?: Array<{ status: number; body: 
 }
 
 describe("CourseImportPage", () => {
+  it("protects dirty and invalid input from SPA links and history navigation", async () => {
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => first }));
+    const router = createMemoryRouter([
+      { path: "/courses/import", element: <><Link to="/courses">课程列表</Link><CourseImportPage /></> },
+      { path: "/courses", element: <p>课程列表页面</p> },
+    ], { initialEntries: ["/courses", "/courses/import?draft=draft-1"], initialIndex: 1 });
+    render(<RouterProvider router={router} />);
+    await screen.findByDisplayValue("微积分");
+    fireEvent.change(screen.getByLabelText("课程名称"), { target: { value: "尚未保存" } });
+    fireEvent.click(screen.getByRole("link", { name: "课程列表" }));
+    await waitFor(() => expect(confirmation).toHaveBeenCalled());
+    expect(screen.getByLabelText("课程名称")).toHaveValue("尚未保存");
+    fireEvent.change(screen.getByLabelText("课程名称"), { target: { value: "" } });
+    await act(async () => { await router.navigate(-1); });
+    expect(screen.getByLabelText("课程名称")).toHaveValue("");
+    confirmation.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("link", { name: "课程列表" }));
+    expect(await screen.findByText("课程列表页面")).toBeInTheDocument();
+    router.dispose();
+  });
+
+  it("continues a saved draft from its URL and displays its saved revision", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", async (input: string) => { requests.push(input); return { ok: true, json: async () => ({ ...first, revision: 3 }) }; });
+    render(<MemoryRouter initialEntries={["/courses/import?draft=draft-1"]}><CourseImportPage /></MemoryRouter>);
+    expect(await screen.findByDisplayValue("微积分")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "草稿保存状态" })).toHaveTextContent("已保存");
+    expect(requests).toContain("/api/course-imports/draft-1");
+  });
+
+  it("keeps a recovery entry visible when confirmed deletion fails", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.stubGlobal("fetch", async (_input: string, init: RequestInit) => init.method === "DELETE" ? { ok: false, status: 500 } : { ok: true, json: async () => [{ id: "draft-1", title: "恢复课程", status: "ready", expiresAt: Date.now() + 86400000, updatedAt: Date.now() }] });
+    render(<MemoryRouter><CourseImportPage /></MemoryRouter>);
+    expect(await screen.findByText("恢复课程")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除恢复课程草稿" }));
+    expect(await screen.findByText("取消导入失败，请稍后重试")).toBeInTheDocument();
+    expect(screen.getByText("恢复课程")).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it("requires confirmation before discarding local edits after a revision conflict", async () => {
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+    mockUpload({ ...first, revision: 0 });
+    let reloads = 0;
+    vi.stubGlobal("fetch", async (input: string, init: RequestInit) => {
+      if (input === "/api/course-imports") return { ok: true, json: async () => [] };
+      if (init.method === "PATCH") return { ok: false, status: 409, json: async () => ({ error: "另一个标签页已保存修改" }) };
+      reloads += 1;
+      return { ok: true, json: async () => ({ ...first, revision: 1, draft: { ...first.draft, title: "服务器版本" } }) };
+    });
+    render(<MemoryRouter><CourseImportPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("选择文件"), { target: { files: [new File(["%PDF"], "course.pdf")] } });
+    await screen.findByDisplayValue("微积分");
+    fireEvent.change(screen.getByLabelText("课程名称"), { target: { value: "本地编辑" } });
+    fireEvent.click(screen.getByRole("button", { name: "更新预览" }));
+    await screen.findByRole("button", { name: "重新加载已保存草稿" });
+    fireEvent.click(screen.getByRole("button", { name: "重新加载已保存草稿" }));
+    expect(screen.getByLabelText("课程名称")).toHaveValue("本地编辑");
+    expect(reloads).toBe(0);
+    confirmation.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "重新加载已保存草稿" }));
+    await screen.findByDisplayValue("服务器版本");
+    expect(reloads).toBe(1);
+  });
+
   it("uploads a PDF, lets the user edit the draft, and confirms only after preview", async () => {
     const calls: string[] = [];
     mockUpload(first);
     vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
       calls.push(`${init?.method ?? "GET"} ${input}`);
-      const data = input.endsWith("/confirm") ? { courseId: "course-123" } : first;
+      const data = input === "/api/course-imports" ? [] : input.endsWith("/confirm") ? { courseId: "course-123" } : { ...first, revision: 1, draft: { ...first.draft, ...JSON.parse(String(init?.body ?? "{}")) } };
       return { ok: true, json: async () => data };
     }));
     render(<MemoryRouter initialEntries={["/courses/import"]}><Routes><Route path="/courses/import" element={<CourseImportPage />} /><Route path="/courses/:id" element={<p>课程已创建</p>} /></Routes></MemoryRouter>);
@@ -50,7 +119,7 @@ describe("CourseImportPage", () => {
     await user.type(screen.getByLabelText("课程名称"), "我的课程");
     await user.click(screen.getByRole("button", { name: "确认创建课程" }));
     await waitFor(() => expect(screen.getByText("课程已创建")).toBeInTheDocument());
-    expect(calls).toEqual(["PATCH /api/course-imports/draft-1", "POST /api/course-imports/draft-1/confirm"]);
+    expect(calls).toEqual(["GET /api/course-imports", "PATCH /api/course-imports/draft-1", "POST /api/course-imports/draft-1/confirm"]);
   });
 
   it("never calls AI until the user checks the data-sharing consent", async () => {
@@ -58,30 +127,50 @@ describe("CourseImportPage", () => {
     mockUpload(first);
     vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
       calls.push(`${init?.method ?? "GET"} ${input}`);
-      return { ok: true, json: async () => first };
+      return { ok: true, json: async () => input.endsWith("/ai-excerpt") ? firstExcerpt : input.endsWith("/ai-operations") ? { id: "operation", startedAt: Date.now(), status: "complete" } : first };
     }));
     render(<MemoryRouter><CourseImportPage /></MemoryRouter>);
     const user = userEvent.setup();
     await user.upload(screen.getByLabelText("选择文件"), new File(["%PDF-test"], "course.pdf", { type: "application/pdf" }));
     await screen.findByDisplayValue("微积分");
     expect(screen.getByRole("button", { name: "AI 完善草稿" })).toBeDisabled();
-    expect(calls.some((call) => call.includes("enrich"))).toBe(false);
+    expect(calls.some((call) => call.includes("ai-operations"))).toBe(false);
+    await user.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
+    await screen.findByLabelText(/同意发送/);
     await user.click(screen.getByLabelText(/同意发送/));
     await user.click(screen.getByRole("button", { name: "AI 完善草稿" }));
-    await waitFor(() => expect(calls.some((call) => call.includes("enrich"))).toBe(true));
+    await waitFor(() => expect(calls.some((call) => call.includes("ai-operations"))).toBe(true));
+  });
+
+  it("keeps the exact excerpt visible after flushing previously unsaved edits", async () => {
+    mockUpload(first);
+    vi.stubGlobal("fetch", async (input: string, init: RequestInit) => {
+      const data = input.endsWith("/ai-excerpt") ? { ...firstExcerpt, revision: 1, text: "新课程的实际摘录" } : init.method === "PATCH" ? { ...first, revision: 1, draft: { ...first.draft, ...JSON.parse(String(init.body)) } } : [];
+      return { ok: true, json: async () => data };
+    });
+    render(<MemoryRouter><CourseImportPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("选择文件"), { target: { files: [new File(["%PDF"], "course.pdf")] } });
+    await screen.findByDisplayValue("微积分");
+    fireEvent.change(screen.getByLabelText("课程名称"), { target: { value: "新课程" } });
+    fireEvent.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
+    expect(await screen.findByText("新课程的实际摘录")).toBeInTheDocument();
+    expect(screen.getByLabelText(/同意发送/)).toBeEnabled();
+    expect(screen.getByLabelText("课程名称")).toHaveValue("新课程");
   });
 
   it("locks draft editing while AI enhancement is in flight", async () => {
     let releaseEnrich: (() => void) | undefined;
     mockUpload(first);
     vi.stubGlobal("fetch", vi.fn(async (input: string) => {
-      if (input.endsWith("/enrich")) await new Promise<void>((resolve) => { releaseEnrich = resolve; });
-      return { ok: true, json: async () => first };
+      if (input.endsWith("/ai-operations")) await new Promise<void>((resolve) => { releaseEnrich = resolve; });
+      return { ok: true, json: async () => input.endsWith("/ai-excerpt") ? firstExcerpt : input.endsWith("/ai-operations") ? { id: "operation", startedAt: Date.now(), status: "complete" } : first };
     }));
     render(<MemoryRouter><CourseImportPage /></MemoryRouter>);
     const user = userEvent.setup();
     await user.upload(screen.getByLabelText("选择文件"), new File(["%PDF-test"], "course.pdf", { type: "application/pdf" }));
     await screen.findByDisplayValue("微积分");
+    await user.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
+    await screen.findByLabelText(/同意发送/);
     await user.click(screen.getByLabelText(/同意发送/));
     await user.click(screen.getByRole("button", { name: "AI 完善草稿" }));
     await waitFor(() => expect(releaseEnrich).toBeDefined());
