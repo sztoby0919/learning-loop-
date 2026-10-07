@@ -7,6 +7,8 @@ import { CourseEventBus } from "./course-events.js";
 import { CourseImportManager } from "./course-import-manager.js";
 import type { ExtractedDocument } from "./course-import.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
+import { extractPdf } from "./pdf-extractor.js";
+import { textPdf } from "../test/pdf-fixtures.js";
 
 const roots: string[] = [];
 const managers: CourseImportManager[] = [];
@@ -27,6 +29,24 @@ async function setup(source?: ExtractedDocument) {
 }
 
 describe("course import lifecycle", () => {
+  it("imports an outline-free PDF, previews source text and preserves page ranges through saving and confirmation", async () => {
+    const bytes = textPdf(["An introduction to learning from data.", "Practice helps test our understanding."]);
+    const source = await extractPdf(bytes, "no-outline.pdf");
+    expect(source.outline).toEqual([]);
+    const { root, manager } = await setup(source);
+    const preview = await manager.create(bytes, "no-outline.pdf");
+    expect(preview.draft.stages[0].source).toMatchObject({ startPage: 1, endPage: 2 });
+    const saved = await manager.update(preview.id, { ...preview.draft, expectedRevision: preview.revision, title: "自学课程" });
+    expect(saved.draft.stages[0].source).toEqual(preview.draft.stages[0].source);
+    const excerpt = await manager.aiExcerpt(saved.id, { expectedRevision: saved.revision, stageIds: [saved.draft.stages[0].id!] });
+    expect(excerpt.pages.map((page) => page.page)).toEqual([1, 2]);
+    expect(excerpt.text).toContain("An introduction to learning from data.");
+    const result = await manager.confirm(saved.id, saved.revision);
+    const markdown = await readFile(path.join(root, "learning-journal", result.courseId, "course.md"), "utf8");
+    expect(markdown).toContain("阅读第 1–2 页");
+    expect(markdown).toContain("页码分段不代表原书章节");
+  });
+
   it("keeps upload out of the course list until confirmation and then registers it immediately", async () => {
     const { root, repository, manager, watchCourse } = await setup();
     const draft = await manager.create(new Uint8Array(Buffer.from("%PDF-test")), "course.pdf");

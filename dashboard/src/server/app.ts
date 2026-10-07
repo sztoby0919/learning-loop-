@@ -27,6 +27,7 @@ import { CourseBackupService } from "./course-backup.js";
 import type { CourseRestoreManager } from "./course-restore.js";
 import { BACKUP_LIMITS } from "../shared/course-backup.js";
 import { backupFileIo } from "./native-file-io.js";
+import { CourseManagement, CourseManagementError } from "./course-management.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(currentDirectory, "../../dist");
@@ -41,6 +42,16 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
+  const management = new CourseManagement(repository, events);
+  app.get("/api/courses/:id/edit", async (request, response, next) => {
+    try { response.json(await management.snapshot(request.params.id as string)); } catch (error) { next(error); }
+  });
+  app.patch("/api/courses/:id", async (request, response, next) => {
+    try { response.json(await management.mutate(request.params.id as string, request.body, false)); } catch (error) { next(error); }
+  });
+  app.delete("/api/courses/:id", async (request, response, next) => {
+    try { response.json(await management.mutate(request.params.id as string, request.body, true)); } catch (error) { next(error); }
+  });
   app.use("/api/restores", async (_request, _response, next) => { try { if (!restores) throw new BackupError("ZIP 恢复不可用：请在 Windows 上检查文件辅助进程与事务目录", 503); await backupFileIo.available(); next(); } catch (error) { next(error); } });
 
   if (restores) {
@@ -287,6 +298,7 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof AiRequestError) { response.status(error.status).json({ error: error.message }); return; }
+    if (error instanceof CourseManagementError) { response.status(error.status).json({ error: error.message }); return; }
     if (error instanceof BackupError) { response.status(error.status).json({ error: error.message }); return; }
     if (error instanceof CourseImportError) { response.status(error.status).json({ error: error.message }); return; }
     if (error instanceof DraftStoreError) { response.status(error.status).json({ error: error.message }); return; }

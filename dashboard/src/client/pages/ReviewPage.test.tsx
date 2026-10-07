@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { ReviewPage } from "./ReviewPage.js";
@@ -11,6 +11,19 @@ it("shows an automatic due review when reviews.md has no handwritten topic", () 
 });
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("keeps each start button in its task row and starts only that topic", async () => {
+  const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ sessionId: "integral-review", mode: "mock", question: { id: "q", question: "积分表示什么？", options: ["累积", "变化率", "极限", "斜率"], knowledgePoint: "积分" } })));
+  vi.stubGlobal("fetch", fetcher);
+  render(<ReviewPage courses={[]} reviews={["导数", "积分"].map((topic) => ({ courseId: "calculus-101", topic, lastReviewed: null, nextReview: null, mastery: null, evidence: "", status: "unscheduled" }))} />);
+  const derivativeRow = screen.getByRole("cell", { name: "导数" }).closest("tr")!;
+  const integralRow = screen.getByRole("cell", { name: "积分" }).closest("tr")!;
+  expect(within(derivativeRow).getByRole("button", { name: "开始复习" })).toBeInTheDocument();
+  await userEvent.setup().click(within(integralRow).getByRole("button", { name: "开始复习" }));
+  expect(await within(integralRow).findByRole("heading", { name: "积分表示什么？" })).toBeInTheDocument();
+  expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ courseId: "calculus-101", topic: "积分", kind: "review-attempt" });
+  expect(within(derivativeRow).getByRole("button", { name: "开始复习" })).toBeEnabled();
+});
 
 it.each(["real", "mock"] as const)("completes a %s review through single-answer feedback and explicit confirmation", async (mode) => {
   const onSaved = vi.fn();

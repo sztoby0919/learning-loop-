@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import type { CourseDetail, SourceReference } from "../../shared/course.js";
 import { MarkdownContent } from "../components/MarkdownContent.js";
 import { SourcedMarkdown } from "../components/SourceReference.js";
+import { CourseManagementPanel } from "../components/CourseManagementPanel.js";
 
 export function CourseDetailPage({ course, sourceReferences = [] }: { course: CourseDetail; sourceReferences?: SourceReference[] }) {
   const [searchParams] = useSearchParams();
@@ -39,6 +40,7 @@ export function CourseDetailPage({ course, sourceReferences = [] }: { course: Co
 
       <Link className="btn btn--primary" to={`/courses/${course.id}/coach`}>开始诊断</Link>
       <Link className="btn" to={`/courses/${course.id}/mistakes`}>查看错题本</Link>
+      <CourseManagementPanel courseId={course.id} title={course.title} />
 
       {(course.warning || course.warnings.length > 0) && (
         <div className="inline-warning" role="status">

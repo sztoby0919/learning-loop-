@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { textPdf, imageOnlyPdf, positionedPdf } from "../test/pdf-fixtures.js";
+import { textPdf, imageOnlyPdf, positionedPdf, nestedOutlinePdf } from "../test/pdf-fixtures.js";
 
 import { PdfImportError, extractPdf } from "./pdf-extractor.js";
 
@@ -25,6 +25,61 @@ function simplePdf(text: string): Uint8Array {
 }
 
 describe("PDF text extraction", () => {
+  it("finds numbered chapter headings below a running page header", async () => {
+    const result = await extractPdf(positionedPdf([
+      { text: "University course", x: 50, y: 780, size: 9 },
+      { text: "Chapter 2 Derivatives", x: 50, y: 740, size: 18 },
+      { text: "A derivative describes the rate of change.", x: 50, y: 700 },
+    ]), "headers.pdf");
+    expect(result.outline).toEqual([{ title: "Chapter 2 Derivatives", page: 1 }]);
+  });
+
+  it("recognizes unit, section and multilevel numbered headings", async () => {
+    for (const title of ["Unit 2 Motion", "Section 3 Limits", "1.2 Derivatives"]) {
+      const result = await extractPdf(textPdf([title]), "numbered.pdf");
+      expect(result.outline).toEqual([{ title, page: 1 }]);
+    }
+  });
+
+  it("recognizes an unnumbered prominent title without treating body text as a chapter", async () => {
+    const result = await extractPdf(positionedPdf([
+      { text: "University course", x: 50, y: 780, size: 9 },
+      { text: "Machine Learning Basics", x: 50, y: 735, size: 24 },
+      { text: "Learning systems use observations to improve predictions.", x: 50, y: 690, size: 12 },
+      { text: "Examples and practice help us understand these systems.", x: 50, y: 670, size: 12 },
+    ]), "slides.pdf");
+    expect(result.outline).toEqual([{ title: "Machine Learning Basics", page: 1 }]);
+    const body = await extractPdf(positionedPdf([
+      { text: "Ordinary paragraph", x: 50, y: 750 },
+      { text: "Another line of ordinary body text.", x: 50, y: 730 },
+    ]), "paragraph.pdf");
+    expect(body.outline).toEqual([]);
+  });
+
+  it("reads nested bookmarks even when the parent has no destination", async () => {
+    const result = await extractPdf(nestedOutlinePdf(), "nested.pdf");
+    expect(result.outline).toEqual([{ title: "Nested lesson", page: 1 }]);
+  });
+
+  it("measures title typography only on its own line even when body fragments repeat title words", async () => {
+    const result = await extractPdf(positionedPdf([
+      { text: "Machine Learning Basics", x: 50, y: 740, size: 24 },
+      { text: "Machine", x: 50, y: 690, size: 12 },
+      { text: "learning uses examples to improve predictions.", x: 105, y: 690, size: 12 },
+      { text: "We evaluate models on separate observations.", x: 50, y: 670, size: 12 },
+    ]), "fragments.pdf");
+    expect(result.outline).toEqual([{ title: "Machine Learning Basics", page: 1 }]);
+  });
+
+  it("does not let ordinary numbered instructions replace a prominent page title", async () => {
+    const result = await extractPdf(positionedPdf([
+      { text: "Installation Guide", x: 50, y: 740, size: 24 },
+      { text: "1. Install the required development tools.", x: 50, y: 690 },
+      { text: "2. Configure the application and check the output.", x: 50, y: 670 },
+    ]), "instructions.pdf");
+    expect(result.outline).toEqual([{ title: "Installation Guide", page: 1 }]);
+  });
+
   it("reads lines top-to-bottom and retains paragraph gaps rather than stream order", async () => {
     const result = await extractPdf(positionedPdf([
       { text: "Second paragraph", x: 50, y: 650 },

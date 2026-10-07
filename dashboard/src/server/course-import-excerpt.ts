@@ -12,7 +12,7 @@ export function buildAiExcerpt(entry: DraftEntry, stageIds: string[]): AiExcerpt
   const excluded = new Set(entry.source.outline.filter((item) => auxiliary.test(item.title.replace(/\s+/g, ""))).map((item) => item.page));
   const available = selected.map((stage) => entry.source.pages.filter((page) => page.page >= stage.source!.startPage && page.page <= Math.min(stage.source!.endPage, stage.source!.startPage + 1) && page.text.trim() && !excluded.has(page.page)).sort((a, b) => a.page - b.page));
   if (available.some((pages) => !pages.length)) throw new CourseImportAiError("所选章节开头两页没有可发送文字，请更换章节", 400);
-  let text = `课程名：${entry.draft.title}\n学习目标：${entry.draft.goal || "未填写"}\n每周学习时间：${entry.draft.weeklyHours ?? "未填写"}\n以下仅是所选章节的目录和开头代表性摘录，并非全文；不要声称覆盖全书。\n所选目录：\n${selected.map((stage) => `${stage.id}: ${stage.title}（来源：${stage.source!.title}）`).join("\n")}\n`;
+  let text = `课程名：${entry.draft.title}\n学习目标：${entry.draft.goal || "未填写"}\n每周学习时间：${entry.draft.weeklyHours ?? "未填写"}\n以下仅是所选章节的目录和开头代表性摘录，并非全文；不要声称覆盖全书。按页码生成的学习阶段仅是阅读分段，不代表原书章节。\n所选目录：\n${selected.map((stage) => `${stage.id}: ${stage.title}（来源：${stage.source!.title}）`).join("\n")}\n`;
   const pages: AiExcerpt["pages"] = [];
   const blockHeader = (id: string, page: number) => `\n[章节 ${id}]\n[第 ${page} 页]\n`;
   // Reserve one complete marker and some actual text for every selected chapter.

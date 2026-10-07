@@ -121,6 +121,7 @@ export class WorkspaceRepository {
   }
 
   async getCourse(id: CourseId): Promise<CourseDetail | null> {
+    if (!this.configured(id)) return null;
     const cached = this.courseCache.get(id);
     return cached ?? this.refreshCourse(id);
   }

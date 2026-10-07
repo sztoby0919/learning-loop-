@@ -76,6 +76,19 @@ describe("OpenAiCompatibleProvider", () => {
     expect(body.messages[1].content).toContain("正确答案：B. 瞬时变化率");
   });
 
+  it("does not emit undefined option text for an out-of-range student answer", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ courseId: "c", weakPoints: [], remediationTasks: [], nextReviewDate: "2027-01-01", proposedChanges: "" }) } }] }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await new OpenAiCompatibleProvider(config).generateDiagnosis({
+      courseId: "c",
+      answers: [{ question, answer: "E", feedback: { questionId: "q1", isCorrect: false, score: 30, correctPart: "B. 瞬时变化率", gap: "x", evidence: question.explanation } }],
+      learningRecords: [],
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { messages: Array<{ content: string }> };
+    expect(body.messages[1].content).toContain("学生选择：E. E");
+    expect(body.messages[1].content).not.toContain("undefined");
+  });
+
   it("replaces an expired model review date with a future date", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-26T04:00:00Z"));

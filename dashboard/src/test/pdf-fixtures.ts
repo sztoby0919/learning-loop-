@@ -35,6 +35,20 @@ function encodePdfObjects(objects: string[], encrypted = false): Uint8Array {
 
 export const imageOnlyPdf = () => textPdf([""], false, true);
 
+export function nestedOutlinePdf(): Uint8Array {
+  const stream = "BT /F1 12 Tf 50 750 Td (Some readable lesson content.) Tj ET";
+  return encodePdfObjects([
+    "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>",
+    "<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 8 0 R >>",
+    "<< /Type /Outlines /First 6 0 R /Last 6 0 R /Count 2 >>",
+    "<< /Title (Lessons) /Parent 5 0 R /First 7 0 R /Last 7 0 R /Count 1 >>",
+    "<< /Title (Nested lesson) /Parent 6 0 R /Dest [4 0 R /Fit] >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+  ]);
+}
+
 export function positionedPdf(items: Array<{ text: string; x: number; y: number; size?: number }>): Uint8Array {
   const stream = items.map(({ text, x, y, size = 12 }) => `BT /F1 ${size} Tf ${x} ${y} Td (${text.replace(/([\\()])/g, "\\$1")}) Tj ET`).join("\n");
   return encodePdfObjects([

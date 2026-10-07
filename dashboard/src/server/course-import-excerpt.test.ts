@@ -11,6 +11,21 @@ function entry(): DraftEntry {
 }
 
 describe("exact AI excerpt", () => {
+  it("can preview AI input for an outline-free PDF using page-based stages", () => {
+    const current = entry();
+    current.source.outline = [];
+    current.source.pages[0].text = "";
+    current.source.pages[1].text = "";
+    current.draft = createBasicDraft(current.source, "no-outline.pdf");
+    const stage = current.draft.stages[0];
+    const excerpt = buildAiExcerpt(current, [stage.id!]);
+    expect(stage.source).toMatchObject({ startPage: 3, endPage: 5 });
+    expect(excerpt.pages.map((page) => page.page)).toEqual([3, 4]);
+    expect(excerpt.pages.every((page) => page.text.length <= 1200)).toBe(true);
+    expect(excerpt.text).toContain("按页码");
+    expect(excerpt.chars).toBeLessThanOrEqual(24000);
+  });
+
   it("sends only the first two pages of the selected chapter and hashes its metadata", () => {
     const draft = entry(); const stageId = draft.draft.stages[1].id!;
     const excerpt = buildAiExcerpt(draft, [stageId]);

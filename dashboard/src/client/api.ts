@@ -2,6 +2,11 @@ import type { CalendarEvent, CourseDetail, CourseId, CourseSummary, CoursesRespo
 import type { AnswerFeedback } from "../server/ai-types.js";
 import type { SettingsData } from "./pages/SettingsPage.js";
 import type { BackupManifest, RestorePreview } from "../shared/course-backup.js";
+import type { CourseEditSnapshot } from "../shared/course-management.js";
+
+export const fetchCourseEdit = (id: string) => importRequest<CourseEditSnapshot>(`/api/courses/${encodeURIComponent(id)}/edit`, { method: "GET" });
+export const saveCourseEdit = (id: string, data: CourseEditSnapshot) => importRequest<{ course: CourseDetail }>(`/api/courses/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+export const deleteCourse = (id: string, expectedHash: string) => importRequest<{ deleted: boolean; filesRetained: boolean }>(`/api/courses/${encodeURIComponent(id)}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedHash }) });
 
 const backupQuery = (courseId?: string) => courseId ? `?courseId=${encodeURIComponent(courseId)}` : "";
 export const previewBackup = (courseId?: string) => requestJson<BackupManifest>(`/api/backups/preview${backupQuery(courseId)}`);

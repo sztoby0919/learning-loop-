@@ -20,9 +20,25 @@ const auxiliaryPdfTitle = (value: string) => /^(?:目录|目次|主要符号表|
 const appendixTitle = (value: string) => /^(?:附录|appendix\b|appendices\b)/i.test(value.trim());
 const positionLabel = (format: ExtractedDocument["sourceFormat"], page: number) => format === "pdf" ? `第 ${page} 页` : `第 ${page} 段文本${format === "docx" ? "（估算位置）" : ""}`;
 
+function pageBasedStages(source: ExtractedDocument): ImportStage[] {
+  const excluded = new Set(source.outline.filter((item) => auxiliaryPdfTitle(item.title) || appendixTitle(item.title)).map((item) => item.page));
+  const readable = source.pages.filter((page) => page.text.trim() && !excluded.has(page.page)).sort((a, b) => a.page - b.page);
+  const width = Math.max(5, Math.ceil(source.pageCount / 60));
+  const stages: ImportStage[] = [];
+  for (let first = 1; first <= source.pageCount; first += width) {
+    const endPage = Math.min(first + width - 1, source.pageCount);
+    // Start at actual text so the existing first-two-page AI excerpt is usable.
+    const startPage = readable.find((page) => page.page >= first && page.page <= endPage)?.page;
+    if (!startPage) continue;
+    const title = startPage === endPage ? `阅读第 ${startPage} 页` : `阅读第 ${startPage}–${endPage} 页`;
+    stages.push({ id: randomUUID(), title, tasks: [`阅读原 PDF 第 ${startPage}–${endPage} 页，整理核心概念与疑问（按页码生成，非原书章节）`], source: { title, startPage, endPage } });
+  }
+  return stages;
+}
+
 export function createBasicDraft(source: ExtractedDocument, originalFilename: string): ImportDraft {
   const seen = new Set<string>();
-  const validSections = source.outline.filter((item) => {
+  const validSections = [...source.outline].sort((a, b) => a.page - b.page).filter((item) => {
     const title = heading(item.title);
     if (!title || item.page < 1 || item.page > source.pageCount || seen.has(title)) return false;
     seen.add(title);
@@ -33,13 +49,14 @@ export function createBasicDraft(source: ExtractedDocument, originalFilename: st
   const learningSections = validSections.filter((item) => !isPdf || (!auxiliaryPdfTitle(item.title) && !appendixTitle(item.title)));
   const sections = learningSections.slice(0, 60);
   const sourceLabel = source.sourceFormat === "docx" ? "Word 文档" : source.sourceFormat === "text" ? "文本文件" : "PDF";
+  const fallbackStages = isPdf && !sections.length ? pageBasedStages(source) : [];
   const stages: ImportStage[] = sections.length
     ? sections.map((item) => ({ id: randomUUID(), title: heading(item.title), tasks: [`阅读“${heading(item.title)}”（从${positionLabel(source.sourceFormat, item.page)}开始），写下核心概念与疑问`], source: {
       title: heading(item.title), startPage: item.page,
       endPage: Math.min(...validSections.filter((next) => next.page > item.page).map((next) => next.page - 1), source.pageCount),
     } }))
-    : [{ id: randomUUID(), title: `阅读原始 ${sourceLabel}`, tasks: [`阅读原始 ${sourceLabel}，并标记需要进一步学习的章节（共 ${source.pageCount} ${source.sourceFormat === "pdf" ? "页" : "段文本"}）`] }];
-  const noteSections = sections.length ? sections : source.pages.filter((page) => page.text.trim()).slice(0, 1).map((page) => ({ title: "原文开头", page: page.page }));
+    : fallbackStages.length ? fallbackStages : [{ id: randomUUID(), title: `阅读原始 ${sourceLabel}`, tasks: [`阅读原始 ${sourceLabel}，并标记需要进一步学习的章节（共 ${source.pageCount} ${source.sourceFormat === "pdf" ? "页" : "段文本"}）`] }];
+  const noteSections = sections.length ? sections : fallbackStages.length ? fallbackStages.map((stage) => ({ title: stage.title, page: stage.source!.startPage })) : source.pages.filter((page) => page.text.trim()).slice(0, 1).map((page) => ({ title: "原文开头", page: page.page }));
   const makeNote = (item: { title: string; page: number }) => ({ title: heading(item.title), page: item.page, content: (isPdf ? plainExcerpt : cleanLine)(source.pages.find((page) => page.page === item.page)?.text ?? "").slice(0, 500), provenance: "source" as const,
     ...(stages.find((stage) => stage.source?.startPage === item.page && stage.source.title === heading(item.title))?.id ? { stageId: stages.find((stage) => stage.source?.startPage === item.page && stage.source.title === heading(item.title))!.id } : {}),
   });
@@ -65,7 +82,7 @@ export function createBasicDraft(source: ExtractedDocument, originalFilename: st
     notes,
     references,
     ...(source.quality ? { quality: source.quality } : {}),
-    warnings: [...source.warnings, ...(learningSections.length > 60 ? ["目录超过 60 项，仅预览前 60 项；可在创建后补充。"] : []), ...(learningSections.length < validSections.length ? ["目录、前言和符号表不默认列为学习阶段；附录保留为参考内容。"] : []), ...(noteSections.length + references.length > 60 ? ["摘录超过 60 项，优先预留附录摘录位置；所有附录页链接仍保留在资源中，请对照原文补充其余摘录。"] : []), source.sourceFormat === "pdf" ? "公式、表格和图片可能无法从 PDF 文字层准确提取，请对照原文核查；文字摘录不是已还原的公式或结构化表格。" : source.sourceFormat === "docx" ? "公式、表格和图片可能无法从 Word 文档中准确提取，请对照原文核查。" : "纯文本/HTML 的文字已提取；图片和公式可能无法保留，请对照原文核查。"],
+    warnings: [...source.warnings, ...(fallbackStages.length ? ["未识别到可用章节，已按页码生成基础学习阶段（最多 60 个）；这些分段不是原书章节，可预览摘录后使用 AI 完善。"] : []), ...(learningSections.length > 60 ? ["目录超过 60 项，仅预览前 60 项；可在创建后补充。"] : []), ...(learningSections.length < validSections.length ? ["目录、前言和符号表不默认列为学习阶段；附录保留为参考内容。"] : []), ...(noteSections.length + references.length > 60 ? ["摘录超过 60 项，优先预留附录摘录位置；所有附录页链接仍保留在资源中，请对照原文补充其余摘录。"] : []), source.sourceFormat === "pdf" ? "公式、表格和图片可能无法从 PDF 文字层准确提取，请对照原文核查；文字摘录不是已还原的公式或结构化表格。" : source.sourceFormat === "docx" ? "公式、表格和图片可能无法从 Word 文档中准确提取，请对照原文核查。" : "纯文本/HTML 的文字已提取；图片和公式可能无法保留，请对照原文核查。"],
     aiStatus: "not-used",
     sourceFormat: source.sourceFormat,
     deadlines,
@@ -82,7 +99,7 @@ export function buildCourseFiles(draft: ImportDraft, courseId: string, today: st
     `来源：${draft.originalFilename}（${draft.pageCount} ${draft.sourceFormat === "pdf" ? "页" : "段文本"}）。`,
     draft.goal ? `学习目标：${cleanLine(draft.goal)}` : "学习目标：待补充。",
     draft.weeklyHours ? `每周计划学习：${draft.weeklyHours} 小时。` : "每周学习时间：未设置。",
-    draft.aiStatus === "complete" ? `部分学习阶段已接受 AI 辅助建议，请以原 ${sourceLabel} 核对；其余阶段保留原始草稿。` : `课程提纲依据 ${sourceLabel} 目录生成，尚未经过 AI 完善。`,
+    draft.aiStatus === "complete" ? `部分学习阶段已接受 AI 辅助建议，请以原 ${sourceLabel} 核对；其余阶段保留原始草稿。` : draft.sourceFormat === "pdf" ? "课程草稿依据 PDF 的已识别标题或页码分段生成，尚未经过 AI 完善；页码分段不代表原书章节。" : `课程提纲依据 ${sourceLabel} 目录生成，尚未经过 AI 完善。`,
   ].join("\n\n");
   const route = draft.stages.map((stage) => `### ${heading(stage.title)}\n${stage.tasks.map((task) => `- [ ] ${cleanLine(task)}`).join("\n")}`).join("\n\n");
   const keyPoints = (depth: 2 | 3) => draft.notes.length

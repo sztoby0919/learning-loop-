@@ -62,6 +62,7 @@ export async function loadDashboardConfig(configPath: string, managedRoot?: stri
     if (!COURSE_ID_PATTERN.test(id)) throw new Error(`${coursePath}: 非法课程 ID“${id}”`);
     if (ids.has(id)) throw new Error(`重复课程 ID“${id}”`);
     ids.add(id);
+    if (matter(courseRaw).data.deleted === true) continue;
     courses.push({ id, root, enabled: true });
   }
 
@@ -87,6 +88,7 @@ export async function loadDashboardConfig(configPath: string, managedRoot?: stri
       if (!COURSE_ID_PATTERN.test(id) || id !== entry.name) throw new Error(`${coursePath}: 托管课程 ID 无效`);
       if (ids.has(id)) throw new Error(`重复课程 ID“${id}”`);
       ids.add(id);
+      if (safeCourseMatter(raw).data.deleted === true) continue;
       courses.push({ id, root: entry.name.startsWith("restored-") ? path.resolve(root) : await realpath(root), enabled: true });
     }
   }

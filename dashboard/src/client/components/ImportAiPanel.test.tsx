@@ -15,6 +15,27 @@ function Harness({ initial = preview, flush, busy = () => {} }: { initial?: Cour
 }
 
 describe("controlled import AI", () => {
+  it("allows page-based stages to reach AI enhancement only after excerpt consent", async () => {
+    const stage = { id: firstId, title: "阅读第 1–4 页", tasks: ["按页码阅读"], source: { title: "阅读第 1–4 页", startPage: 1, endPage: 4 } };
+    const initial = { ...preview, draft: { ...preview.draft, stages: [stage] } };
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ ...excerpt, stageIds: [firstId], pages: [excerpt.pages[0]] }) }));
+    render(<Harness initial={initial} />);
+    expect(screen.getByLabelText("完善 阅读第 1–4 页")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "查看将发送的摘录" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "AI 完善草稿" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
+    await screen.findByLabelText(/同意发送/);
+    fireEvent.click(screen.getByLabelText(/同意发送/));
+    expect(screen.getByRole("button", { name: "AI 完善草稿" })).toBeEnabled();
+  });
+
+  it("explains missing sources without falsely calling an imported fallback a manual stage", () => {
+    const initial = { ...preview, draft: { ...preview.draft, stages: [{ id: firstId, title: "阅读原始 PDF", tasks: ["Read"] }] } };
+    render(<Harness initial={initial} />);
+    expect(screen.getByText(/未关联原文页码/)).toBeInTheDocument();
+    expect(screen.getByText(/重新导入/)).toBeInTheDocument();
+    expect(screen.queryByText(/手工阶段/)).not.toBeInTheDocument();
+  });
   it("removes hidden selected IDs after deleting a source chapter", async () => {
     const changed = vi.fn();
     const requests: unknown[] = [];

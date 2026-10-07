@@ -45,9 +45,32 @@ describe("PDF course draft", () => {
     expect(parseResourcesMarkdown(files["resources.md"], "resources.md").items[0].location).toBe("/api/courses/course-abc/source");
   });
 
-  it("falls back to an honest reading task when the PDF has no usable outline", () => {
+  it("generates page-based stages with real sources when the PDF has no usable outline", () => {
     const draft = createBasicDraft({ ...source, outline: [] }, "教材.pdf");
-    expect(draft.stages).toMatchObject([{ title: "阅读原始 PDF", tasks: ["阅读原始 PDF，并标记需要进一步学习的章节（共 12 页）"] }]);
+    expect(draft.stages.map((stage) => stage.source)).toEqual([
+      { title: "阅读第 1–5 页", startPage: 1, endPage: 5 },
+      { title: "阅读第 6–10 页", startPage: 6, endPage: 10 },
+    ]);
+    expect(draft.warnings.join(" ")).toContain("按页码");
+    expect(draft.notes[0]).toMatchObject({ page: 1, stageId: draft.stages[0].id, provenance: "source" });
+    expect(draft.stages.every((stage) => stage.tasks.every((task) => !task.includes("已完成")))).toBe(true);
+    const files = buildCourseFiles(draft, "course-fallback", "2026-10-07");
+    expect(files["course.md"]).toContain("页码分段");
+    expect(files["course.md"]).not.toContain("目录生成");
+  });
+
+  it("starts page-based sources at readable pages and limits large PDFs to sixty stages", () => {
+    const draft = createBasicDraft({ ...source, outline: [], pageCount: 1000,
+      pages: Array.from({ length: 1000 }, (_, i) => ({ page: i + 1, text: i < 3 ? "" : `Source page ${i + 1}` })),
+    }, "large.pdf");
+    expect(draft.stages.length).toBeLessThanOrEqual(60);
+    expect(draft.stages[0].source?.startPage).toBe(4);
+    expect(draft.stages.at(-1)?.source?.endPage).toBe(1000);
+  });
+
+  it("does not turn auxiliary-only PDF pages into AI learning sources", () => {
+    const draft = createBasicDraft({ ...source, outline: [{ title: "目录", page: 1 }, { title: "附录", page: 6 }] }, "auxiliary.pdf");
+    expect(draft.stages.every((stage) => !stage.source)).toBe(true);
   });
 
   it("binds generated stages to physical chapter ranges and notes to stable IDs", () => {

@@ -43,6 +43,15 @@ export class AiResponseFormatError extends Error {
 
 const emptyProposedChanges = () => ({ courseMarkdown: "", reviewsMarkdown: "", mistakesMarkdown: "", sessionMarkdown: "" });
 
+// 安全地把选项字母解析为选项文本：只接受单一 A-D 字母，非法或越界时回退为字母本身，
+// 避免把 undefined 拼进发送给模型的诊断上下文。
+function optionText(letter: unknown, options: string[]): string {
+  if (typeof letter !== "string" || !letter) return "";
+  const index = letter.toUpperCase().charCodeAt(0) - 65;
+  if (index < 0 || index >= options.length) return letter.trim();
+  return options[index];
+}
+
 function todayInShanghai(): string {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
@@ -292,7 +301,7 @@ export class OpenAiCompatibleProvider {
       const answersText = params.answers
         .map(
           (a, i) =>
-            `第${i + 1}题：${a.question.question}\n学生选择：${a.answer}. ${a.question.options[a.answer.charCodeAt(0) - 65]}\n正确答案：${a.question.answer}. ${a.question.options[a.question.answer.charCodeAt(0) - 65]}\n是否正确：${a.feedback.isCorrect}\n得分：${a.feedback.score}\n解析：${a.question.explanation}`,
+            `第${i + 1}题：${a.question.question}\n学生选择：${a.answer}. ${optionText(a.answer, a.question.options)}\n正确答案：${a.question.answer}. ${optionText(a.question.answer, a.question.options)}\n是否正确：${a.feedback.isCorrect}\n得分：${a.feedback.score}\n解析：${a.question.explanation}`,
         )
         .join("\n\n");
 

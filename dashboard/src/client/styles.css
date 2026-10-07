@@ -1441,6 +1441,10 @@ input:focus-visible {
 .mistake-card h2 { margin: 14px 0; font-family: var(--serif); font-size: 21px; }
 .mistake-card p { line-height: 1.6; }
 .practice-flow { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.review-table td { vertical-align: middle; }
+.review-task-action .practice-flow { margin: 0; padding: 0; border: 0; }
+.review-task-action .practice-flow > .btn { white-space: nowrap; }
+.review-task-action:has(section) { min-width: 320px; }
 .practice-flow h3 { margin: 12px 0 0; font-size: 19px; }
 .practice-topic { color: var(--text-secondary); }
 .practice-mode { display: inline-block; border: 1px solid var(--warning); border-radius: 4px; padding: 3px 8px; color: var(--warning); font-size: 12px; font-weight: 700; }
@@ -1859,3 +1863,13 @@ input:focus-visible {
 .import-ai-candidates article { padding-block: 1rem; border-top: 1px solid var(--line); }
 .import-ai-actions { flex-wrap: wrap; }
 @media (max-width: 700px) { .import-ai-comparison { grid-template-columns: minmax(0, 1fr); } }
+
+.course-management { margin-block: 1rem; }
+.course-management__actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.course-edit-form { display: grid; gap: 1rem; margin-block: 1rem; padding: 1.2rem; background: var(--surface); border: 1px solid var(--line); border-radius: 0.6rem; }
+.course-edit-form label { display: grid; gap: 0.4rem; }
+.course-edit-form input:not([type="checkbox"]), .course-edit-form textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 0.65rem; border: 1px solid var(--line); border-radius: 0.3rem; background: var(--surface); color: var(--ink); font: inherit; }
+.course-edit-form fieldset { display: grid; gap: 0.7rem; min-width: 0; border: 1px solid var(--line); }
+.course-edit-task { display: flex; gap: 0.5rem; align-items: center; }
+.course-edit-task label { display: flex; flex-shrink: 0; align-items: center; }
+@media (max-width: 700px) { .course-edit-task { flex-wrap: wrap; } }
