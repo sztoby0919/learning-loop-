@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DraftEntry } from "../shared/course-import.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { buildCourseFiles, createBasicDraft } from "./course-import.js";
 import { DraftStore } from "./course-import-store.js";
 import { recoverImportCommits, stageImportCourse } from "./course-import-recovery.js";
@@ -16,7 +16,7 @@ import { WorkspaceRepository } from "./workspace-repository.js";
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))); });
 async function setup() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "learning-loop-commit-recovery-")); roots.push(root);
+  const root = await canonicalTempRoot("learning-loop-commit-recovery-"); roots.push(root);
   const id = randomUUID(); const now = Date.now();
   const source = { title: "Book", pageCount: 1, pages: [{ page: 1, text: "Chapter text" }], outline: [{ title: "Chapter 1", page: 1 }], sourceFormat: "pdf" as const, warnings: [] };
   const entry: DraftEntry = { version: 1, id, courseId: `course-${id.slice(0, 8)}`, revision: 0, createdAt: now, updatedAt: now, expiresAt: now + 7 * 86400000, state: "open", draft: createBasicDraft(source, "book.pdf"), source, sourceExtension: ".pdf" };

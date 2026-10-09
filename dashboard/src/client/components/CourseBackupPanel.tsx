@@ -34,7 +34,7 @@ export function CourseBackupPanel({ courses }: { courses: Array<{ id: string; ti
   }, []);
   return <section className="workspace-panel course-backup-panel">
     <div className="section-heading"><h2>ZIP 备份与恢复</h2><span>仅在本地处理，不调用 AI</span></div>
-    <p>安全 ZIP 操作仅支持 Windows 的本地目录，需要系统 Windows PowerShell 可用；其他系统暂不支持。辅助进程不可用时不会降级读写，普通课程和导入仍可使用。</p>
+    <p>安全 ZIP 操作面向本地单服务实例：Windows 使用系统 Windows PowerShell/.NET，macOS 与 Linux 使用随项目提供的 POSIX 辅助进程。辅助进程或按对象标识寻址不可用时不会降级读写，普通课程和导入仍可使用。</p>
     <p>ZIP 包含笔记和学习记录，可能涉及个人信息，请妥善保管。不包含密钥、配置、草稿、缓存和外部链接目标。</p>
     <label>备份范围<select aria-label="备份范围" value={scope} disabled={Boolean(busy)} onChange={(event) => { setScope(event.target.value); setManifest(null); setDownloaded(false); }}>
       <option value="">全部课程</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}

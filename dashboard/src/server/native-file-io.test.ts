@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { link, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { canonicalTempRoot, linkType, nativeIoPosix, nativeIoSupported } from "./native-test-support.js";
 import { BoundFileIo } from "./native-file-io.js";
 
 const roots: string[] = []; const workers: BoundFileIo[] = [];
@@ -11,18 +11,18 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 async function setup() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-native-")); roots.push(root);
+  const root = await canonicalTempRoot("learning-loop-native-"); roots.push(root);
   const io = new BoundFileIo(); workers.push(io);
   return { root, io };
 }
 
-describe.runIf(process.platform === "win32")("Windows actual bound IO", () => {
+describe.runIf(nativeIoSupported)("actual bound IO", () => {
   it("fails closed on an unsupported platform without spawning a helper", async () => {
-    const { io } = await setup(); vi.stubGlobal("process", { platform: "linux" });
+    const { io } = await setup(); vi.stubGlobal("process", { platform: "aix" });
     try { await expect(io.available()).rejects.toMatchObject({ status: 503 }); expect(io.workerPid).toBeUndefined(); }
     finally { vi.unstubAllGlobals(); }
   });
-  it("holds ancestors against rename in another process throughout actual writes", async () => {
+  it.runIf(process.platform === "win32")("holds ancestors against rename in another process throughout actual writes", async () => {
     const { root, io } = await setup(); const parent = path.join(root, "parent"); await mkdir(parent);
     const writer = await io.createWriter(path.join(parent, "file.md"), 100);
     await expect(rename(parent, path.join(root, "moved"))).rejects.toMatchObject({ code: expect.stringMatching(/EPERM|EBUSY|EACCES/) });
@@ -30,9 +30,17 @@ describe.runIf(process.platform === "win32")("Windows actual bound IO", () => {
     expect(await readFile(path.join(parent, "file.md"), "utf8")).toBe("真实写入");
     await rename(parent, path.join(root, "moved"));
   }, 20000);
+  it.runIf(nativeIoPosix)("keeps the bound directory object across a rename instead of following its path", async () => {
+    const { root, io } = await setup(); const parent = path.join(root, "parent"); await mkdir(parent);
+    const writer = await io.createWriter(path.join(parent, "file.md"), 100);
+    await rename(parent, path.join(root, "moved")); await mkdir(parent);
+    await writer.write(Buffer.from("真实写入")); await writer.finish();
+    expect(await readFile(path.join(root, "moved", "file.md"), "utf8")).toBe("真实写入");
+    expect(await readdir(parent)).toEqual([]);
+  }, 20000);
   it("rejects a junction ancestor without touching its external sentinel", async () => {
     const { root, io } = await setup(); const outside = path.join(root, "outside"); await mkdir(outside); await writeFile(path.join(outside, "sentinel.md"), "private");
-    const redirected = path.join(root, "redirected"); await symlink(outside, redirected, "junction");
+    const redirected = path.join(root, "redirected"); await symlink(outside, redirected, linkType());
     await expect(io.readFile(path.join(redirected, "sentinel.md"), 100)).rejects.toThrow(/链接|reparse|安全/i);
     await expect(io.createWriter(path.join(redirected, "new.md"), 100)).rejects.toThrow(/链接|reparse|安全/i);
     expect(await readdir(outside)).toEqual(["sentinel.md"]); expect(await readFile(path.join(outside, "sentinel.md"), "utf8")).toBe("private");

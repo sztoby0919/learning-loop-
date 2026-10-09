@@ -1,15 +1,15 @@
 // @vitest-environment node
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 import { deflateRawSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { rawZip } from "../test/zip-fixtures.js";
 import { BACKUP_LIMITS } from "../shared/course-backup.js";
 import { BackupZipCodec, validateArchivePath } from "./backup-zip.js";
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
-async function target() { const base = await mkdtemp(path.join(os.tmpdir(), "learning-loop-zip-")); roots.push(base); await writeFile(path.join(base, "sentinel"), "keep"); return { base, root: path.join(base, "extract") }; }
+async function target() { const base = await canonicalTempRoot("learning-loop-zip-"); roots.push(base); await writeFile(path.join(base, "sentinel"), "keep"); return { base, root: path.join(base, "extract") }; }
 const filename = "courses/course-test/course.md";
 function mutate(input: Uint8Array, change: (bytes: Buffer, central: number) => void) { const bytes = Buffer.from(input); const central = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02])); change(bytes, central); return bytes; }
 describe("bounded backup ZIP codec", () => {

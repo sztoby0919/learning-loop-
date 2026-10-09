@@ -1,9 +1,9 @@
 // @vitest-environment node
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CourseImportManager } from "./course-import-manager.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 import { CourseEventBus } from "./course-events.js";
 import { CourseBackupService } from "./course-backup.js";
@@ -16,7 +16,7 @@ vi.mock("node:fs/promises", { spy: true });
 const roots: string[] = []; const imports: CourseImportManager[] = [];
 afterEach(async () => { vi.restoreAllMocks(); imports.splice(0).forEach((manager) => manager.stopScheduledCleanup()); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "learning-loop-restore-recovery-")); roots.push(root);
+  const root = await canonicalTempRoot("learning-loop-restore-recovery-"); roots.push(root);
   await fs.writeFile(path.join(root, "config.json"), '{"courses":[]}');
   const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, () => "2026-10-02");
   const events = new CourseEventBus(); const codec = new BackupZipCodec();
