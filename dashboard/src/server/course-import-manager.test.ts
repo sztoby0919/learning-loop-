@@ -1,9 +1,9 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import os from "node:os";
+import { readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CourseEventBus } from "./course-events.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { CourseImportManager } from "./course-import-manager.js";
 import type { ExtractedDocument } from "./course-import.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 async function setup(source?: ExtractedDocument) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-import-"));
+  const root = await canonicalTempRoot("learning-loop-import-");
   roots.push(root);
   const repository = new WorkspaceRepository({ configPath: path.join(root, "dashboard.config.example.json"), courses: [] }, () => "2026-09-26");
   const watchCourse = vi.fn();

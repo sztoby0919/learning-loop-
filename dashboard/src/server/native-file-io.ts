@@ -14,6 +14,33 @@ export class NativeIoError extends BackupError {
   constructor(message: string, status = 422, readonly code?: string) { super(message, status); }
 }
 interface ResponseFrame { ok: boolean; result?: Record<string, unknown>; error?: string; code?: string; status?: number; }
+interface HelperLaunch { executable: string; args: string[]; env: NodeJS.ProcessEnv; windowsHide: boolean; }
+
+/**
+ * Resolve the fixed in-project auxiliary program for this platform. Every helper
+ * speaks the same framed protocol and enforces the same rules, and a platform
+ * without a helper fails closed instead of falling back to plain path IO.
+ */
+export function resolveHelperLaunch(): HelperLaunch {
+  if (process.platform === "win32") {
+    const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+    return {
+      executable: path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", fileURLToPath(new URL("./native/windows-file-io.ps1", import.meta.url))],
+      env: { SystemRoot: systemRoot, windir: systemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir(), PATH: path.join(systemRoot, "System32") },
+      windowsHide: true,
+    };
+  }
+  if (process.platform === "darwin" || process.platform === "linux") {
+    return {
+      executable: process.execPath,
+      args: [fileURLToPath(new URL("./native/posix-file-io.mjs", import.meta.url))],
+      env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", TMPDIR: os.tmpdir() },
+      windowsHide: false,
+    };
+  }
+  throw new NativeIoError("ZIP 安全文件操作暂不支持此平台", 503);
+}
 
 /** All data IO runs inside this worker, while its own ancestor handles are held. */
 export class BoundFileIo {
@@ -38,20 +65,17 @@ export class BoundFileIo {
     if (this.closed || this.failed) throw this.failed ?? new NativeIoError("文件辅助进程已关闭", 503);
     if (this.retiring) await this.retiring;
     if (this.starting) return this.starting;
-    if (process.platform !== "win32") throw new NativeIoError("ZIP 安全文件操作仅支持 Windows", 503);
-    const executable = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    const script = fileURLToPath(new URL("./native/windows-file-io.ps1", import.meta.url));
+    const launch = resolveHelperLaunch();
     this.starting = new Promise<void>((resolve, reject) => {
-      const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
-      const child = childProcess.spawn(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", script], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { SystemRoot: systemRoot, windir: systemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir(), PATH: path.join(systemRoot, "System32") } });
+      const child = childProcess.spawn(launch.executable, launch.args, { windowsHide: launch.windowsHide, stdio: ["pipe", "pipe", "pipe"], env: launch.env });
       this.child = child;
       child.stderr.resume(); // Never log upstream/bootstrap stderr or its environment.
-      child.once("error", () => this.fail(new NativeIoError("Windows 文件辅助进程不可用", 503)));
-      child.once("exit", () => { if (!this.retiring && !this.closed) this.fail(new NativeIoError("Windows 文件辅助进程已退出，操作未继续", 503)); });
-      child.stdin.on("error", () => this.fail(new NativeIoError("Windows 文件辅助进程管道已关闭", 503)));
+      child.once("error", () => this.fail(new NativeIoError("文件辅助进程不可用", 503)));
+      child.once("exit", () => { if (!this.retiring && !this.closed) this.fail(new NativeIoError("文件辅助进程已退出，操作未继续", 503)); });
+      child.stdin.on("error", () => this.fail(new NativeIoError("文件辅助进程管道已关闭", 503)));
       let ready = false;
-      const timeout = setTimeout(() => { const error = new NativeIoError("Windows 文件辅助进程启动超时", 503); this.fail(error); reject(error); }, budgetMs);
-      const rejectStart = () => { clearTimeout(timeout); if (!ready) reject(this.failed ?? new NativeIoError("Windows 文件辅助进程不可用", 503)); };
+      const timeout = setTimeout(() => { const error = new NativeIoError("文件辅助进程启动超时", 503); this.fail(error); reject(error); }, budgetMs);
+      const rejectStart = () => { clearTimeout(timeout); if (!ready) reject(this.failed ?? new NativeIoError("文件辅助进程不可用", 503)); };
       child.once("error", rejectStart); child.once("exit", rejectStart);
       child.stdout.on("data", (data: Buffer) => {
         this.incoming = Buffer.concat([this.incoming, data]);
@@ -63,7 +87,7 @@ export class BoundFileIo {
           let frame: ResponseFrame;
           try { frame = JSON.parse(raw.toString("utf8")); } catch { this.fail(new NativeIoError("辅助进程协议无效", 503)); break; }
           if (!ready) {
-            if (!frame.ok || frame.result?.protocol !== 1) { this.fail(new NativeIoError("辅助进程能力检查失败", 503)); rejectStart(); break; }
+            if (!frame.ok || frame.result?.protocol !== 1) { this.fail(new NativeIoError(frame.error ?? "辅助进程能力检查失败", 503)); rejectStart(); break; }
             ready = true; clearTimeout(timeout); resolve(); continue;
           }
           const request = this.pending;

@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CourseEventBus } from "./course-events.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { CourseImportManager } from "./course-import-manager.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 import { CourseBackupService } from "./course-backup.js";
@@ -15,7 +15,7 @@ const roots: string[] = []; const managers: CourseImportManager[] = [];
 vi.mock("node:fs/promises", { spy: true });
 afterEach(async () => { managers.splice(0).forEach((manager) => manager.stopScheduledCleanup()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); vi.restoreAllMocks(); });
 async function setup() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-backup-")); roots.push(root);
+  const root = await canonicalTempRoot("learning-loop-backup-"); roots.push(root);
   const today = () => "2026-10-02"; const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, today);
   const imports = new CourseImportManager({ root, repository, events: new CourseEventBus(), today, watchCourse: () => {} }); managers.push(imports);
   const draft = await imports.create(new TextEncoder().encode("# 教材\n\n## 第一章\n原文内容"), "book.md");

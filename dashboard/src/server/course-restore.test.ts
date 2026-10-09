@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import JSZip from "jszip";
 import { CourseImportManager } from "./course-import-manager.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { CourseEventBus } from "./course-events.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 import { CourseBackupService } from "./course-backup.js";
@@ -16,7 +16,7 @@ import { courseMatterEngines } from "./safe-course-matter.js";
 const roots: string[] = []; const imports: CourseImportManager[] = [];
 afterEach(async () => { imports.splice(0).forEach((manager) => manager.stopScheduledCleanup()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); vi.restoreAllMocks(); });
 async function setup() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-restore-")); roots.push(root);
+  const root = await canonicalTempRoot("learning-loop-restore-"); roots.push(root);
   const today = () => "2026-10-02"; const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, today); const events = new CourseEventBus();
   const manager = new CourseImportManager({ root, repository, events, today, watchCourse: () => {} }); imports.push(manager);
   const draft = await manager.create(new TextEncoder().encode("# 教材\n\n## 章节\n正文"), "book.md"); const { courseId } = await manager.confirm(draft.id, draft.revision);

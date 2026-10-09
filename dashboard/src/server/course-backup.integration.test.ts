@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import request from "supertest";
 import { afterEach, expect, it } from "vitest";
 import { createApp } from "./app.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { CourseImportManager } from "./course-import-manager.js";
 import { CourseEventBus } from "./course-events.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
@@ -13,7 +13,7 @@ import { BackupZipCodec } from "./backup-zip.js";
 const roots: string[] = []; const managers: CourseImportManager[] = [];
 afterEach(async () => { managers.splice(0).forEach((manager) => manager.stopScheduledCleanup()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 it("downloads a ZIP only for selected courses while existing JSON remains unchanged", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-backup-http-")); roots.push(root);
+  const root = await canonicalTempRoot("learning-loop-backup-http-"); roots.push(root);
   const today = () => "2026-10-02"; const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, today); const events = new CourseEventBus();
   const imports = new CourseImportManager({ root, repository, events, today, watchCourse: () => {} }); managers.push(imports);
   const draft = await imports.create(new TextEncoder().encode("# 教材\n\n## 章节\n正文"), "book.md"); const { courseId } = await imports.confirm(draft.id, draft.revision);

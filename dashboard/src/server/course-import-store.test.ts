@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DraftEntry } from "../shared/course-import.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { createBasicDraft } from "./course-import.js";
 import { DraftStore } from "./course-import-store.js";
 
@@ -15,7 +15,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 async function setup() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "learning-loop-draft-store-"));
+  const root = await canonicalTempRoot("learning-loop-draft-store-");
   roots.push(root);
   let now = Date.UTC(2026, 9, 1);
   const source = { title: "Course", pageCount: 2, pages: [{ page: 1, text: "Chapter text" }], outline: [{ title: "Chapter 1", page: 1 }], warnings: [], sourceFormat: "pdf" as const };
@@ -114,7 +114,7 @@ describe("persistent import drafts", () => {
 
   it("refuses a draft directory junction and cleanup never follows it", async () => {
     const { root, store, entry, setNow } = await setup();
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "learning-loop-outside-")); roots.push(outside);
+    const outside = await canonicalTempRoot("learning-loop-outside-"); roots.push(outside);
     await fs.writeFile(path.join(outside, "keep.txt"), "keep");
     await store.create(entry, new Uint8Array([1]));
     const linkId = randomUUID();

@@ -5,6 +5,7 @@ import path from "node:path";
 import request from "supertest";
 import multer from "multer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { canonicalTempRoot, nativeIoSupported } from "./native-test-support.js";
 import { BoundFileIo, NativeIoError, backupFileIo } from "./native-file-io.js";
 import { BackupZipCodec } from "./backup-zip.js";
 import { CourseBackupService } from "./course-backup.js";
@@ -22,7 +23,7 @@ beforeEach(resetFs);
 const roots: string[] = []; const imports: CourseImportManager[] = [];
 afterEach(async () => { vi.restoreAllMocks(); resetFs(); imports.splice(0).forEach((manager) => manager.stopScheduledCleanup()); for (const root of roots.splice(0)) await actualFs.rm(root, { recursive: true, force: true }); });
 async function setup() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "learning-loop-native-integration-")); roots.push(root);
+  const root = await canonicalTempRoot("learning-loop-native-integration-"); roots.push(root);
   const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, () => "2026-10-02"); const events = new CourseEventBus();
   const manager = new CourseImportManager({ root, repository, events, today: () => "2026-10-02", watchCourse: () => {} }); imports.push(manager);
   const draft = await manager.create(Buffer.from("# 教材\n\n## 章节\n原文"), "book.md"); await manager.confirm(draft.id, draft.revision);
@@ -30,7 +31,7 @@ async function setup() {
   const restores = new CourseRestoreManager({ root, repository, events, codec, watchCourse: () => {} });
   return { root, repository, manager, events, backups, restores };
 }
-it.runIf(process.platform === "win32")("the actual ZIP pipeline never falls back to Node path IO, including publication cache registration", async () => {
+it.runIf(nativeIoSupported)("the actual ZIP pipeline never falls back to Node path IO, including publication cache registration", async () => {
   const { backups, restores, repository } = await setup();
   for (const method of methods) {
     vi.mocked(fs[method]).mockRejectedValue(new Error(`unsafe Node path IO: ${method}`));

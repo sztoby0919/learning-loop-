@@ -1,11 +1,11 @@
 // @vitest-environment node
-import { mkdtemp, rm, readFile, writeFile, readdir } from "node:fs/promises";
-import os from "node:os";
+import { rm, readFile, writeFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
 import { createApp } from "./app.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { CourseEventBus } from "./course-events.js";
 import { CourseImportManager } from "./course-import-manager.js";
 import { createCourseImportAi } from "./course-import-ai.js";
@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 async function setup(realPdf = false) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-api-import-"));
+  const root = await canonicalTempRoot("learning-loop-api-import-");
   roots.push(root);
   const events = new CourseEventBus();
   const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, () => "2026-09-26");

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,12 +23,15 @@ const envFile = fileURLToPath(new URL("../../../.env", import.meta.url));
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const port = Number(process.env.PORT ?? 3000);
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+// Canonical project root: the native file helper binds every path component with
+// O_NOFOLLOW, so a workspace reached through a symlink (iCloud's ~/Documents,
+// /tmp or /var on macOS) must be resolved once before any ZIP operation.
+const projectRoot = realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.."));
 const configPath = resolveDashboardConfigPath();
 const recoveryIssues = await recoverImportCommits(projectRoot);
 let zipAvailable = true;
 try { await recoverRestoreTransactions(projectRoot); }
-catch { zipAvailable = false; console.warn("ZIP 备份恢复不可用：需要可运行原生文件辅助进程的 Windows 环境及可核验事务目录。原数据已保留，健康课程与普通导入继续可用。"); }
+catch { zipAvailable = false; console.warn("ZIP 备份恢复不可用：需要当前系统可运行项目内固定的原生文件辅助进程，并具备可核验的事务目录。原数据已保留，健康课程与普通导入继续可用。"); }
 for (const issue of recoveryIssues) console.warn(`Import recovery ${issue.courseId}: ${issue.warning}`);
 const config = await loadDashboardConfig(configPath, path.join(projectRoot, "learning-journal"));
 const todayInShanghai = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
