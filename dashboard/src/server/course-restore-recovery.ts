@@ -5,6 +5,7 @@ import { BACKUP_LIMITS, type RestorePreview } from "../shared/course-backup.js";
 import { BackupError, archiveFileLimit, safeBackupDirectory, validateArchivePath } from "./backup-zip.js";
 import { readBackupFile } from "./course-backup.js";
 import { backupFileIo, type DirectoryOwner } from "./native-file-io.js";
+import { sourceFilePattern } from "./course-bundle-files.js";
 
 const id = z.string().uuid();
 const courseId = z.string().regex(/^[a-z0-9][a-z0-9-]{0,99}$/);
@@ -45,9 +46,9 @@ function validateState(value: unknown): RestoreState {
       const full = validateArchivePath(`courses/${course.newId}/${entry.path}`);
       if (paths.has(full.toLowerCase()) || entry.bytes > archiveFileLimit(full, BACKUP_LIMITS)) throw new BackupError("恢复文件记录校验失败");
       paths.add(full.toLowerCase()); total += entry.bytes;
-      if (entry.path.startsWith("source.")) sources++;
+      if (sourceFilePattern.test(entry.path)) sources++;
     }
-    if (sources > 1 || course.sourceIncluded !== (sources === 1)) throw new BackupError("恢复来源记录校验失败");
+    if (sources > 100 || course.sourceIncluded !== (sources > 0)) throw new BackupError("恢复来源记录校验失败");
   }
   if (paths.size > 1999 || total > BACKUP_LIMITS.totalBytes) throw new BackupError("恢复记录超限");
   return state;
@@ -86,7 +87,7 @@ export async function verifyRestoreCourse(directory: string, state: RestoreState
     const full = validateArchivePath(`courses/${course.newId}/${entry.path}`);
     const bytes = (await readBackupFile(path.join(directory, ...entry.path.split("/")), archiveFileLimit(full, BACKUP_LIMITS))).bytes;
     if (bytes.length !== entry.bytes || sha256(bytes) !== entry.sha256) throw new BackupError("恢复暂存文件已变更，校验失败");
-    if (!entry.path.startsWith("source.")) markdown[entry.path] = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (!sourceFilePattern.test(entry.path)) markdown[entry.path] = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   }
   return markdown;
 }

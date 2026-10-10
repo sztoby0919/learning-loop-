@@ -18,7 +18,7 @@ const quality = z.object({ version: z.literal(1), noTextPages: z.array(pageNumbe
 const sourceSchema = z.object({
   title: z.string().max(10000), pageCount: pageNumber, sourceFormat: format,
   pages: z.array(z.object({ page: pageNumber, text: z.string() }).strict()).max(10000),
-  outline: z.array(z.object({ title: z.string().max(10000), page: pageNumber }).strict()).max(10000),
+  outline: z.array(z.object({ title: z.string().max(10000), page: pageNumber, level: z.number().int().min(1).max(1000).optional() }).strict()).max(10000),
   warnings: z.array(z.string().max(2000)).max(1000), quality: quality.optional(),
 }).strict();
 const stageSchema = z.object({ id: uuid, title, tasks: z.array(z.string().trim().min(1).max(300)).min(1).max(20),
@@ -38,6 +38,7 @@ const suggestionSchema = z.object({ stageId: uuid, title, tasks: z.array(z.strin
 const candidateSchema = z.object({ id: uuid, baseRevision: z.number().int().nonnegative(), suggestions: z.array(suggestionSchema).min(1).max(60) }).strict();
 const operationSchema = z.object({ id: uuid, status: z.enum(["running", "complete", "cancelled", "failed", "interrupted"]), startedAt: z.number().int().nonnegative(), candidate: candidateSchema.optional(), error: z.string().max(500).optional() }).strict();
 const entrySchema = z.object({
+  bundleId: uuid.optional(),
   version: z.literal(1), id: uuid, courseId: z.string().regex(/^course-[a-z0-9-]+$/), revision: z.number().int().nonnegative(),
   createdAt: z.number().int().nonnegative(), updatedAt: z.number().int().nonnegative(), expiresAt: z.number().int().nonnegative(),
   state: z.enum(["open", "committing", "committed"]), draft: draftSchema, source: sourceSchema, sourceExtension: ext,
@@ -195,7 +196,7 @@ export class DraftStore {
     await this.serial(entry.id, async () => {
       const existing = await this.read(entry.id, options);
       if (existing.revision !== expectedRevision) throw new DraftStoreError("草稿已在其他页面更新，请重新载入后再试", 409);
-      if (entry.revision !== expectedRevision + (options.metadataOnly ? 0 : 1) || entry.courseId !== existing.courseId || entry.createdAt !== existing.createdAt || entry.expiresAt !== existing.expiresAt || entry.sourceExtension !== existing.sourceExtension || !isDeepStrictEqual(entry.source, existing.source)) throw unsafe();
+      if (entry.revision !== expectedRevision + (options.metadataOnly ? 0 : 1) || entry.bundleId !== existing.bundleId || entry.courseId !== existing.courseId || entry.createdAt !== existing.createdAt || entry.expiresAt !== existing.expiresAt || entry.sourceExtension !== existing.sourceExtension || !isDeepStrictEqual(entry.source, existing.source)) throw unsafe();
       if (options.metadataOnly && (entry.state !== existing.state || !isDeepStrictEqual(entry.draft, existing.draft))) throw unsafe();
       await this.atomicWrite(await this.draftDirectory(entry.id), valid);
     });

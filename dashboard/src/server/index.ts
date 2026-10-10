@@ -18,6 +18,7 @@ import { recoverImportCommits } from "./course-import-recovery.js";
 import { recoverRestoreTransactions } from "./course-restore-recovery.js";
 import { CourseRestoreManager } from "./course-restore.js";
 import { BackupZipCodec } from "./backup-zip.js";
+import { CourseBundles } from "./course-bundles.js";
 
 const envFile = fileURLToPath(new URL("../../../.env", import.meta.url));
 if (existsSync(envFile)) process.loadEnvFile(envFile);
@@ -48,9 +49,11 @@ const imports = new CourseImportManager({
   aiEnricher: aiRuntime.mode === "compatible" ? createCourseImportAi(aiRuntime.config) : undefined,
 });
 await imports.initialize();
+const bundles = new CourseBundles(imports, repository, events);
+await bundles.initialize();
 const restores = zipAvailable ? new CourseRestoreManager({ root: projectRoot, repository, events, codec: new BackupZipCodec(), watchCourse: (root) => watcher.add(["course.md", "notes.md", "reviews.md", "resources.md", "schedule.md"].map((name) => path.join(root, name)).concat(path.join(root, "sessions", "*.md"))) }) : undefined;
 if (restores) { try { await restores.initialize(); } catch { zipAvailable = false; console.warn("ZIP 恢复初始化失败，已保留事务目录。请核对后重新启动；其他功能继续可用。"); } }
-createApp(repository, events, aiService, imports, aiRuntime.mode === "compatible" ? "real" : "mock", zipAvailable ? restores : undefined).listen(port, "127.0.0.1", () => {
+createApp(repository, events, aiService, imports, aiRuntime.mode === "compatible" ? "real" : "mock", zipAvailable ? restores : undefined, bundles).listen(port, "127.0.0.1", () => {
   console.log(`Study dashboard server: http://127.0.0.1:${port}`);
   console.log(`Dashboard config: ${config.configPath}`);
   console.log(`Courses: ${config.courses.map((course) => course.id).join(", ")}`);

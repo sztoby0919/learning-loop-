@@ -13,6 +13,7 @@ import { validateSessionMarkdown } from "./session-records.js";
 import { safeCourseMatter } from "./safe-course-matter.js";
 import { cleanupRestorePreviews, ensureRestoreDirectory, directoryExists, writeBackupFile, restoreOwner, publicRestorePreview, publishedDirectory, readRestoreState, recoverRestoreTransactions, restoreDirectory, restoreHome, rollbackRestore, sha256, stagedDirectory, verifyRestoreCourse, withRestoreLock, writeRestoreState, type RestoreState } from "./course-restore-recovery.js";
 import { backupFileIo } from "./native-file-io.js";
+import { sourceDocuments, sourceFilePattern } from "./course-bundle-files.js";
 
 const manifestSchema = z.object({ format: z.literal("learning-loop-backup"), version: z.literal(1), exportedAt: z.string().max(100), courses: z.array(z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,99}$/), title: z.string().max(10000), sourceIncluded: z.boolean(), warnings: z.array(z.string().max(10000)).max(100), files: z.array(z.object({ path: z.string().max(400), bytes: z.number().int().nonnegative(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).min(1).max(1999) }).strict()).min(1).max(50) }).strict();
 
@@ -67,20 +68,22 @@ export class CourseRestoreManager {
       for (const course of manifest.courses) {
         const originals: Record<string, string> = {}; const newId = `restored-${randomUUID()}`;
         const output = path.join(directory, "courses", newId); await backupFileIo.createOwnedDirectory(output, { ...owner, newId }); await backupFileIo.ensureDirectory(path.join(output, "sessions"));
-        let source: string | undefined;
+        const sources: string[] = [];
         for (const entry of course.files) {
           const name = validateArchivePath(entry.path);
           if (!name.startsWith(`courses/${course.id}/`) || claimed.has(name)) throw new BackupError("manifest 课程文件关联或重复校验失败");
           const found = actual.get(name);
           if (!found || found.bytes !== entry.bytes || found.sha256 !== entry.sha256) throw new BackupError("归档文件长度或 SHA-256 校验失败");
           claimed.add(name); const relative = name.slice(`courses/${course.id}/`.length);
-          if (relative.startsWith("source.")) { if (source) throw new BackupError("课程来源文件重复"); source = relative; continue; }
+          if (sourceFilePattern.test(relative)) { sources.push(relative); continue; }
           const content = (await readBackupFile(path.join(extracted, ...name.split("/")), BACKUP_LIMITS.markdownBytes)).bytes;
           if (content.length !== entry.bytes || sha256(content) !== entry.sha256) throw new BackupError("解压后的 Markdown 发生变化，SHA-256 校验失败");
           originals[relative] = new TextDecoder("utf-8", { fatal: true }).decode(content);
         }
         if (!originals["course.md"]) throw new BackupError("课程缺少 course.md 文件");
-        if (course.sourceIncluded !== Boolean(source)) throw new BackupError("manifest 来源文件状态不一致");
+        if (course.sourceIncluded !== (sources.length > 0)) throw new BackupError("manifest 来源文件状态不一致");
+        const declared = sourceDocuments(originals["course.md"]);
+        if (declared.length ? declared.length !== sources.length || declared.some((doc) => !sources.includes(doc.storedName)) : sources.length > 1) throw new BackupError("课件来源清单与归档不一致");
         const warnings = validateMarkdown(originals, course.id);
         const mapped = remapCourseFiles(originals, course.id, newId); validateMarkdown(mapped, newId);
         const files: RestoreState["courses"][number]["files"] = [];
@@ -90,14 +93,14 @@ export class CourseRestoreManager {
           await writeBackupFile(path.join(output, ...name.split("/")), content, BACKUP_LIMITS.markdownBytes);
           files.push({ path: name, bytes: content.length, sha256: sha256(content) });
         }
-        if (source) {
+        for (const source of sources) {
           const name = `courses/${course.id}/${source}`;
           const sourceBytes = (await readBackupFile(path.join(extracted, ...name.split("/")), archiveFileLimit(name))).bytes;
           if (sourceBytes.length !== actual.get(name)!.bytes || sha256(sourceBytes) !== actual.get(name)!.sha256) throw new BackupError("解压后的来源文件发生变化，SHA-256 校验失败");
           await writeBackupFile(path.join(output, source), sourceBytes, archiveFileLimit(name));
           files.push({ path: source, bytes: actual.get(name)!.bytes, sha256: actual.get(name)!.sha256 });
         }
-        state.courses.push({ originalId: course.id, newId, title: parseCourseMarkdown(mapped["course.md"], "course.md").title, fileCount: files.length, sourceIncluded: Boolean(source), warnings: [...course.warnings, ...warnings].slice(0, 100), files });
+        state.courses.push({ originalId: course.id, newId, title: parseCourseMarkdown(mapped["course.md"], "course.md").title, fileCount: files.length, sourceIncluded: sources.length > 0, warnings: [...course.warnings, ...warnings].slice(0, 100), files });
       }
       if (claimed.size !== decoded.length || [...actual.keys()].some((name) => !claimed.has(name))) throw new BackupError("归档包含 manifest 未声明的文件");
       await writeRestoreState(root, state); await backupFileIo.removeDirectory(extracted, { ...owner, newId: "extracted" }); complete = true;

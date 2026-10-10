@@ -7,6 +7,7 @@ import { BackupError, archiveFileLimit, validateArchivePath } from "./backup-zip
 import { parseCourseMarkdown } from "./course-parser.js";
 import { backupFileIo } from "./native-file-io.js";
 import { safeCourseMatter } from "./safe-course-matter.js";
+import { sourceDocuments, sourceFilePattern } from "./course-bundle-files.js";
 const markdownNames = ["course.md", "notes.md", "reviews.md", "resources.md", "schedule.md"];
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const changed = () => new BackupError("备份期间课程文件发生变化，请停止编辑后重试", 409);
@@ -32,14 +33,18 @@ export class CourseBackupService {
       const listing = await backupFileIo.listDirectory(course.root);
       const names = listing.entries.map((entry) => entry.name).sort();
       listings.push({ dir: course.root, identity: listing.identity, names: JSON.stringify(names) });
-      const sourceNames = names.filter((name) => /^source\.(pdf|docx|html|htm|md|markdown|txt)$/.test(name));
-      if (sourceNames.length > 1) throw new BackupError("每门课程最多包含一个受管来源文件");
+      const courseSnapshot = await readBackupFile(path.join(course.root, "course.md"), BACKUP_LIMITS.markdownBytes);
+      const metadata = sourceDocuments(Buffer.from(courseSnapshot.bytes).toString("utf8"));
+      const declared = metadata.map((doc) => doc.storedName);
+      const sourceNames = metadata.length ? declared : names.filter((name) => /^source\.(pdf|docx|html|htm|md|markdown|txt)$/.test(name));
+      if (!metadata.length && sourceNames.length > 1) throw new BackupError("未登记的来源文件重复，请检查课程资料");
+      if (sourceNames.some((name) => !names.includes(name))) throw new BackupError("来源清单中的课件缺失，无法生成完整备份");
       for (const name of sourceNames) if (listing.entries.find((entry) => entry.name === name)?.kind !== "file") throw new BackupError("来源文件是链接或特殊文件，拒绝备份");
       const managed = path.dirname(path.resolve(course.root)).toLowerCase() === path.resolve(this.imports.managedCourseRoot).toLowerCase();
-      const source = managed && sourceNames.length ? path.join(course.root, sourceNames[0]) : null;
+      const includedSources = managed || metadata.length ? sourceNames : [];
       const candidates = markdownNames.filter((name) => names.includes(name));
       if (!candidates.includes("course.md")) throw new BackupError("课程缺少 course.md，无法备份");
-      if (source) candidates.push(path.basename(source));
+      candidates.push(...includedSources);
       if (names.includes("sessions")) {
         const dir = path.join(course.root, "sessions"); const sessionListing = await backupFileIo.listDirectory(dir);
         const sessions = sessionListing.entries.map((entry) => entry.name).sort();
@@ -52,7 +57,7 @@ export class CourseBackupService {
         const archivePath = validateArchivePath(`courses/${course.id}/${name}`);
         const limit = archiveFileLimit(archivePath);
         const filename = path.join(course.root, ...name.split("/"));
-        const content = await readBackupFile(filename, limit);
+        const content = name === "course.md" ? courseSnapshot : await readBackupFile(filename, limit);
         total += content.bytes.length;
         if (entries.length >= BACKUP_LIMITS.files - 1 || total > BACKUP_LIMITS.totalBytes - BACKUP_LIMITS.manifestBytes) throw new BackupError("备份大小或文件数量超限，请分课程备份", 413);
         if (name === "course.md") { const raw = Buffer.from(content.bytes).toString("utf8"); safeCourseMatter(raw); const parsed = parseCourseMarkdown(raw, filename); if (parsed.id !== course.id) throw new BackupError("课程 ID 与配置不一致"); title = parsed.title; }
@@ -61,7 +66,7 @@ export class CourseBackupService {
         files.push({ path: archivePath, bytes: content.bytes.length, sha256 });
         observations.push({ filename, fingerprint: content.identity, sha256, limit });
       }
-      manifest.courses.push({ id: course.id, title, sourceIncluded: Boolean(source), warnings: source ? ["只包含受管原课件，不包含其他外部资源。"] : ["未包含原课件或外部资源；这不是整个工作区的完整备份。"], files });
+      manifest.courses.push({ id: course.id, title, sourceIncluded: includedSources.length > 0, warnings: includedSources.length ? [`包含 ${includedSources.length} 份受管原课件，不包含其他外部资源。`] : ["未包含原课件或外部资源；这不是整个工作区的完整备份。"], files });
     }
     for (const file of observations) { const checked = await readBackupFile(file.filename, file.limit); if (checked.identity !== file.fingerprint || hash(checked.bytes) !== file.sha256) throw changed(); }
     for (const listing of listings) { const current = await backupFileIo.listDirectory(listing.dir); if (current.identity !== listing.identity || JSON.stringify(current.entries.map((entry) => entry.name).sort()) !== listing.names) throw changed(); }

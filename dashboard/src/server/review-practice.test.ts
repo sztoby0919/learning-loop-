@@ -19,6 +19,24 @@ const provider: AiProvider = {
 };
 const original = `---\ncourseId: calculus-101\nupdated: 2026-09-20\n---\n| 知识点 | 上次复习 | 下次复习 | 掌握度 1-10 | 复习证据 |\n| --- | --- | --- | ---: | --- |\n| 导数 | 2026-09-20 | 2026-09-21 | 5 | 手工计划不是作答证据 |\n`;
 
+it("repairs a review topic mismatch using feedback before returning a playable real question", async () => {
+  const requests: Parameters<AiProvider["generateQuestions"]>[0][] = [];
+  const { manager } = await setup({ ...provider, async generateQuestions(params) { requests.push(params); return [{ ...question, knowledgePoint: requests.length === 1 ? "积分" : "导数" }]; } });
+  const current = manager(); const created = await current.create({ courseId: "calculus-101", topic: "导数", kind: "review-attempt" });
+  expect(requests).toHaveLength(2); expect(requests[1]).toMatchObject({ instructions: expect.stringContaining("知识点与复习主题不一致") });
+  expect(created.mode).toBe("real"); expect((await current.answer(created.sessionId, "q", "B")).feedback.isCorrect).toBe(true);
+});
+
+it("reports a topic mismatch without claiming the review question repeats the original", async () => {
+  const { manager } = await setup({ ...provider, async generateQuestions() { return [{ ...question, knowledgePoint: "积分" }]; } });
+  await expect(manager().create({ courseId: "calculus-101", topic: "导数", kind: "review-attempt" })).rejects.toThrow("生成题目的知识点与复习主题不一致，请重试");
+});
+
+it("reports invalid review options without claiming the question repeats the original", async () => {
+  const { manager } = await setup({ ...provider, async generateQuestions() { return [{ ...question, options: ["重复", "重复", "面积", "体积"] }]; } });
+  await expect(manager().create({ courseId: "calculus-101", topic: "导数", kind: "review-attempt" })).rejects.toThrow("模型生成的练习题格式无效、选项重复或泄露答案，请重试");
+});
+
 async function setup(aiProvider: AiProvider = provider) {
   const root = await mkdtemp(path.join(tmpdir(), "review-practice-"));
   await mkdir(path.join(root, "sessions"));

@@ -11,7 +11,7 @@ import type { AiProvider } from "./ai-provider.js";
 import { AiService } from "./ai-service.js";
 import { createApp } from "./app.js";
 import { CourseEventBus } from "./course-events.js";
-import { AiResponseFormatError } from "./openai-compatible-provider.js";
+import { AiResponseFormatError, OpenAiCompatibleProvider } from "./openai-compatible-provider.js";
 import { AiRequestError } from "./ai-request.js";
 import { renderAttemptSession, readMistakes } from "./session-records.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
@@ -140,6 +140,7 @@ describe("targeted practice API", () => {
     const { app, mistakeId } = await setup({ ...provider, async generateQuestions() { throw new AiResponseFormatError(["0.options"]); } });
     const result = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" }).expect(502);
     expect(result.body.error).toContain("0.options");
+    expect(result.body.retryable).toBe(true);
   });
 
   it("treats a provider outage as a retryable generation error", async () => {
@@ -147,12 +148,20 @@ describe("targeted practice API", () => {
     const result = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" }).expect(502);
     expect(result.body.error).toContain("生成练习题失败");
     expect(result.body.error).not.toContain("private provider detail");
+    expect(result.body.retryable).toBe(true);
   });
 
   it("preserves a safe timeout cause when targeted practice generation times out", async () => {
     const { app, mistakeId } = await setup({ ...provider, async generateQuestions() { throw new AiRequestError("模型服务请求超时，已中止本地请求", 504); } });
     const result = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" });
     expect(result.status).toBe(504); expect(result.body.error).toContain("超时");
+    expect(result.body.retryable).toBe(true);
+  });
+
+  it("marks an AI authentication failure as nonretryable even though it returns HTTP 502", async () => {
+    const { app, mistakeId } = await setup({ ...provider, async generateQuestions() { throw new AiRequestError("模型服务鉴权失败", 502, false); } });
+    const result = await request(app).post("/api/practice-sessions").send({ courseId: "calculus-101", mistakeId, kind: "targeted-practice" }).expect(502);
+    expect(result.body.retryable).toBe(false);
   });
 });
 
@@ -185,6 +194,16 @@ async function answerReview(app: ReturnType<typeof createApp>, choice = "B") {
 }
 
 describe("review completion API", () => {
+  it("recovers an HTTP 200 AI response with the wrong topic and returns a question that can be answered", async () => {
+    const prompts: string[] = [];
+    const generated = (await provider.generateQuestions({ courseId: "calculus-101", topic: "导数", count: 1, difficulty: "medium", context: "" }))[0];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => { prompts.push(JSON.parse(String(init.body)).messages[0].content); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ questions: [{ ...generated, knowledgePoint: prompts.length === 1 ? "积分" : "导数" }] }) } }] })); });
+    try {
+      const { app, courseRoot } = await setup(new OpenAiCompatibleProvider({ baseUrl: "https://example.invalid/v1", apiKey: "test-key", model: "test", maxTokens: 2000, temperature: 0.2 }));
+      await writeFile(path.join(courseRoot, "reviews.md"), reviewsMarkdown);
+      await answerReview(app); expect(prompts).toHaveLength(2); expect(prompts[1]).toContain("知识点与复习主题不一致");
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("accepts a registered topic and rejects an unknown course, topic, or empty topic", async () => {
     const { app } = await setupReview();
     for (const [courseId, topic, status] of [["unknown", "导数", 404], ["calculus-101", "伪造主题", 404], ["calculus-101", "  ", 400]] as const) {

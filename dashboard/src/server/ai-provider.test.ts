@@ -11,6 +11,20 @@ const question = { id: "q1", question: "导数表示什么？", options: ["平�
 afterEach(() => vi.unstubAllGlobals());
 
 describe("OpenAiCompatibleProvider", () => {
+  it("recovers a single-question truncation by increasing its output budget", async () => {
+    const budgets: number[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => { budgets.push(JSON.parse(String(init.body)).max_tokens); return new Response(JSON.stringify({ choices: [{ finish_reason: budgets.length === 1 ? "length" : "stop", message: { content: budgets.length === 1 ? "[{" : JSON.stringify([question]) } }] })); });
+    expect(await new OpenAiCompatibleProvider(config).generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "课程内容" })).toEqual([question]);
+    expect(budgets).toEqual([2000, 4000]);
+  });
+  it.each([question, { questions: [question] }])("accepts a complete single question or an explicit questions envelope", async (output) => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) } }] })));
+    expect(await new OpenAiCompatibleProvider(config).generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "课程内容" })).toEqual([question]);
+  });
+  it("identifies token truncation even when a partial completion contains valid JSON", async () => {
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ choices: [{ finish_reason: "length", message: { content: JSON.stringify([question]) } }] }) }));
+    await expect(new OpenAiCompatibleProvider(config).generateQuestions({ courseId: "c", topic: "导数", count: 1, difficulty: "medium", context: "课程内容" })).rejects.toThrow(/截断/);
+  });
   it.each([
     ["unlabeled code fence", "```\n", "\n```"],
     ["JSON fence with Windows line endings", "```JSON\r\n", "\r\n```"],
@@ -137,6 +151,7 @@ describe("OpenAiCompatibleProvider", () => {
     expect(body.messages[0].content).toContain("单选题");
     expect(body.messages[0].content).toContain("4 个选项");
     expect(body.messages[0].content).toContain("不可信");
+    expect(body.messages[1].content).toContain('knowledgePoint 必须原样填写为 "导数"');
     expect(body.messages[0].content).not.toContain("简答题");
   });
 

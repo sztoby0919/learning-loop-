@@ -1,0 +1,44 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
+import { afterEach, expect, it, vi } from "vitest";
+import type { CourseBundlePreview } from "../../shared/course-bundle.js";
+import * as api from "../api.js";
+import { CourseBundlePage } from "./CourseBundlePage.js";
+vi.mock("../api.js", () => ({ fetchCourseBundle: vi.fn(), updateCourseBundleTitle: vi.fn(), uploadCourseFiles: vi.fn(), confirmCourseBundle: vi.fn(), cancelCourseBundle: vi.fn(), updateCourseImport: vi.fn(), fetchCourseImport: vi.fn() }));
+const doc = (id: string, filename: string) => ({ id, courseId: "course-child", revision: 0, draft: { title: filename, originalFilename: filename, sourceFormat: "text" as const, pageCount: 1, goal: "", weeklyHours: null, stages: [{ id: "33333333-3333-4333-8333-333333333333", title: "原阶段", tasks: ["原任务"] }], notes: [], warnings: [], aiStatus: "not-used" as const }, files: {}, aiAvailable: false, excerptChars: 24000 });
+const bundle: CourseBundlePreview = { id: "batch", revision: 0, title: "课程", courseId: "course-main", expiresAt: Date.now() + 86400000, documents: [doc("first", "a.md"), doc("second", "b.md")], files: { "course.md": "preview" } };
+afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); });
+const mount = (query = "bundle=batch") => render(<MemoryRouter initialEntries={[`/courses/import?${query}`]}><Routes><Route path="/courses/import" element={<CourseBundlePage />} /><Route path="/courses/:id" element={<p>课程详情页面</p>} /></Routes></MemoryRouter>);
+it("上传完成后的草稿网址更新不会触发离开提醒，刷新可使用整批 ID 恢复", async () => {
+  vi.mocked(api.uploadCourseFiles).mockResolvedValue(bundle);
+  vi.mocked(api.fetchCourseBundle).mockResolvedValue(bundle);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const router = createMemoryRouter([{ path: "/courses/import", element: <CourseBundlePage /> }], { initialEntries: ["/courses/import?multi=1"] });
+  render(<RouterProvider router={router} />);
+  fireEvent.change(screen.getByLabelText("选择课件"), { target: { files: [new File(["# 文档"], "a.md")] } });
+  await screen.findByDisplayValue("课程");
+  await waitFor(() => expect(router.state.location.search).toBe("?bundle=batch"));
+  expect(confirm).not.toHaveBeenCalled();
+});
+it("切换课件前保存编辑，确认携带各文件的保存修订号", async () => {
+  vi.mocked(api.fetchCourseBundle).mockResolvedValue(bundle);
+  vi.mocked(api.updateCourseImport).mockImplementation(async (preview) => ({ ...preview, revision: 1 }));
+  vi.mocked(api.confirmCourseBundle).mockResolvedValue({ courseId: "course-main" });
+  mount(); await screen.findByDisplayValue("原阶段");
+  fireEvent.change(screen.getByLabelText("阶段 1"), { target: { value: "修改阶段" } });
+  fireEvent.change(screen.getByLabelText("当前课件"), { target: { value: "1" } });
+  await screen.findByRole("heading", { name: "b.md" });
+  fireEvent.click(screen.getByRole("button", { name: "确认创建课程" }));
+  await screen.findByText("课程详情页面");
+  expect(api.confirmCourseBundle).toHaveBeenCalledWith(expect.objectContaining({ documents: [expect.objectContaining({ id: "first", revision: 1 }), expect.objectContaining({ id: "second", revision: 0 })] }), "课程");
+});
+it("追加前需确认，取消确认不写入；冲突保留草稿", async () => {
+  vi.mocked(api.fetchCourseBundle).mockResolvedValue({ ...bundle, targetCourseId: "course-main" });
+  vi.mocked(api.confirmCourseBundle).mockRejectedValue(new Error("课程文件版本冲突"));
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  mount("bundle=batch&append=course-main"); await screen.findByDisplayValue("课程");
+  fireEvent.click(screen.getByRole("button", { name: "确认追加课件" }));
+  await waitFor(() => expect(confirm).toHaveBeenCalled()); expect(api.confirmCourseBundle).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true); fireEvent.click(screen.getByRole("button", { name: "确认追加课件" }));
+  await screen.findByText("课程文件版本冲突"); expect(screen.getByLabelText("课程名称")).toHaveValue("课程");
+});

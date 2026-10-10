@@ -6,6 +6,7 @@ import * as yauzl from "yauzl";
 import { BACKUP_LIMITS, type BackupEntry, type BackupLimits, type DecodedBackupFile, type ZipCodec, type BackupDirectoryOwner } from "../shared/course-backup.js";
 import { backupFileIo } from "./native-file-io.js";
 import { BackupError } from "./backup-error.js";
+import { sourceFilePattern } from "./course-bundle-files.js";
 export { BackupError } from "./backup-error.js";
 
 const invalidPath = () => new BackupError("ZIP 路径不在允许范围内，拒绝恢复");
@@ -16,7 +17,7 @@ export function validateArchivePath(name: string): string {
   if (name === "manifest.json") return name;
   const parts = name.split("/");
   if (parts[0] !== "courses" || !courseId.test(parts[1] ?? "")) throw invalidPath();
-  if (parts.length === 3 && (/^(course|notes|reviews|resources|schedule)\.md$/.test(parts[2]) || /^source\.(pdf|docx|html|htm|md|markdown|txt)$/.test(parts[2]))) return name;
+  if (parts.length === 3 && (/^(course|notes|reviews|resources|schedule)\.md$/.test(parts[2]) || sourceFilePattern.test(parts[2]))) return name;
   if (parts.length === 4 && parts[2] === "sessions" && sessionName.test(parts[3])) return name;
   throw invalidPath();
 }
@@ -28,7 +29,7 @@ function directoryPath(name: string): void {
 export function archiveFileLimit(name: string, limits: BackupLimits = BACKUP_LIMITS): number {
   validateArchivePath(name);
   if (name === "manifest.json") return limits.manifestBytes;
-  if (path.posix.basename(name).startsWith("source.")) return limits.sourceBytes[name.split(".").pop()!] ?? 0;
+  if (sourceFilePattern.test(path.posix.basename(name))) return limits.sourceBytes[name.split(".").pop()!] ?? 0;
   return limits.markdownBytes;
 }
 export async function safeBackupDirectory(dir: string): Promise<void> {

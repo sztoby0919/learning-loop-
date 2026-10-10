@@ -3,6 +3,25 @@ import type { AnswerFeedback } from "../server/ai-types.js";
 import type { SettingsData } from "./pages/SettingsPage.js";
 import type { BackupManifest, RestorePreview } from "../shared/course-backup.js";
 import type { CourseEditSnapshot } from "../shared/course-management.js";
+import type { CourseBundlePreview, CourseBundleSummary } from "../shared/course-bundle.js";
+
+export const fetchCourseBundle = (id: string) => importRequest<CourseBundlePreview>(`/api/course-bundles/${encodeURIComponent(id)}`, { method: "GET" });
+export const updateCourseBundleTitle = (id: string, title: string, expectedRevision: number) => importRequest<CourseBundlePreview>(`/api/course-bundles/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, expectedRevision }) });
+export const listCourseBundles = () => requestJson<CourseBundleSummary[]>("/api/course-bundles");
+export const confirmCourseBundle = (preview: CourseBundlePreview, title: string) => importRequest<{ courseId: string }>(`/api/course-bundles/${encodeURIComponent(preview.id)}/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, expectedRevision: preview.revision, drafts: preview.documents.map((doc) => ({ id: doc.id, revision: doc.revision })) }) });
+export async function cancelCourseBundle(id: string): Promise<void> {
+  const response = await fetch(`/api/course-bundles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!response.ok) { const data = await response.json().catch(() => ({})); throw new ImportRequestError(data.error ?? `HTTP ${response.status}`, response.status); }
+}
+export function uploadCourseFiles(files: File[], targetCourseId?: string, onProgress?: UploadProgressCallback): Promise<CourseBundlePreview> {
+  return new Promise((resolve, reject) => {
+    const body = new FormData(); files.forEach((file) => body.append("files", file)); if (targetCourseId) body.append("targetCourseId", targetCourseId);
+    const xhr = new XMLHttpRequest(); xhr.open("POST", "/api/course-bundles");
+    xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(Math.round(event.loaded / event.total * 100)); };
+    xhr.onload = () => { try { const data = JSON.parse(xhr.responseText); if (xhr.status >= 200 && xhr.status < 300) resolve(data); else reject(new ImportRequestError(data.error ?? `HTTP ${xhr.status}`, xhr.status)); } catch { reject(new Error("上传响应无法解析，请重试")); } };
+    xhr.onerror = () => reject(new Error("上传失败，请检查连接后重试")); xhr.send(body);
+  });
+}
 
 export const fetchCourseEdit = (id: string) => importRequest<CourseEditSnapshot>(`/api/courses/${encodeURIComponent(id)}/edit`, { method: "GET" });
 export const saveCourseEdit = (id: string, data: CourseEditSnapshot) => importRequest<{ course: CourseDetail }>(`/api/courses/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
@@ -62,12 +81,12 @@ export function fetchMistakes(id: CourseId, signal?: AbortSignal): Promise<{ ite
   return requestJson(`/api/courses/${id}/mistakes`, signal);
 }
 
-export function createPracticeSession(courseId: CourseId, mistakeId: string): Promise<PracticeSessionCreated> {
-  return importRequest("/api/practice-sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courseId, mistakeId, kind: "targeted-practice" }) });
+export function createPracticeSession(courseId: CourseId, mistakeId: string, signal?: AbortSignal): Promise<PracticeSessionCreated> {
+  return importRequest("/api/practice-sessions", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courseId, mistakeId, kind: "targeted-practice" }) });
 }
 
-export function createReviewSession(courseId: CourseId, topic: string): Promise<PracticeSessionCreated> {
-  return importRequest("/api/practice-sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courseId, topic, kind: "review-attempt" }) });
+export function createReviewSession(courseId: CourseId, topic: string, signal?: AbortSignal): Promise<PracticeSessionCreated> {
+  return importRequest("/api/practice-sessions", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courseId, topic, kind: "review-attempt" }) });
 }
 
 export function answerPracticeSession(sessionId: string, questionId: string, choice: PracticeChoice): Promise<{ feedback: AnswerFeedback }> {
@@ -82,7 +101,7 @@ import type { AiExcerpt, AiOperation, CourseImportPreview, DraftSummary } from "
 export type { CourseImportPreview } from "../shared/course-import.js";
 
 export class ImportRequestError extends Error {
-  constructor(message: string, public readonly status: number) { super(message); }
+  constructor(message: string, public readonly status: number, public readonly retryable?: boolean) { super(message); }
 }
 
 export const listCourseImports = () => importRequest<DraftSummary[]>("/api/course-imports", { method: "GET" });
@@ -99,8 +118,8 @@ export const undoImportAi = (id: string, expectedRevision: number) => importJson
 async function importRequest<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({ error: `HTTP ${response.status}` })) as { error?: string };
-    throw new ImportRequestError(payload.error ?? `HTTP ${response.status}`, response.status);
+    const payload = await response.json().catch(() => ({ error: `HTTP ${response.status}` })) as { error?: string; retryable?: boolean };
+    throw new ImportRequestError(payload.error ?? `HTTP ${response.status}`, response.status, payload.retryable);
   }
   return response.json() as Promise<T>;
 }

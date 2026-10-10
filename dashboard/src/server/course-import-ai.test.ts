@@ -12,6 +12,41 @@ const response = (content: string) => ({ ok: true, json: async () => ({ choices:
 const call = (fetcher: typeof fetch) => createCourseImportAi(config, fetcher)(excerpt, draft, new AbortController().signal);
 
 describe("course import AI", () => {
+  it("budgets a large chapter selection and still validates every selected chapter", async () => {
+    const stageIds = Array.from({ length: 60 }, (_, index) => `11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`);
+    const largeExcerpt: AiExcerpt = { ...excerpt, stageIds, pages: stageIds.map((id) => ({ stageId: id, page: 1, text: "极限定义" })) };
+    const fetcher = vi.fn().mockResolvedValue(response(JSON.stringify({ suggestions: stageIds.map((id) => ({ ...suggestion, stageId: id })) })));
+    const result = await createCourseImportAi(config, fetcher)(largeExcerpt, draft, new AbortController().signal);
+    expect(result.map((item) => item.stageId)).toEqual(stageIds);
+    const body = JSON.parse(fetcher.mock.calls[0][1].body);
+    expect(body.max_tokens).toBeGreaterThan(16000);
+    expect(body.max_tokens).toBeLessThanOrEqual(32000);
+    expect(body.messages[1].content).toBe(largeExcerpt.text);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("reports token truncation instead of suggesting the model cannot output JSON", async () => {
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [{ finish_reason: "length", message: { content: '{"suggestions":[' } }] }) });
+    await expect(call(fetcher)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/截断.*减少.*章节/) });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("does not accept even parseable output when the provider reports truncation", async () => {
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [{ finish_reason: "length", message: { content: JSON.stringify({ suggestions: [suggestion] }) } }] }) });
+    await expect(call(fetcher)).rejects.toThrow(/截断/);
+  });
+  it("extracts the complete draft between separate explanatory JSON objects", async () => {
+    const content = `示例格式：{"suggestions":[]}\n实际结果：${JSON.stringify({ suggestions: [suggestion] })}\n说明：{"status":"done"}`;
+    expect((await call(vi.fn().mockResolvedValue(response(content))))[0].title).toBe("极限");
+  });
+  it("keeps braces and escaped quotes in note content when extracting wrapped JSON", async () => {
+    const text = '集合 {x} 与区间 [a,b]，说明 "趋近"。';
+    const content = `以下是结果：${JSON.stringify({ suggestions: [{ ...suggestion, notes: [{ ...suggestion.notes[0], content: text }] }] })}\n完成。`;
+    expect((await call(vi.fn().mockResolvedValue(response(content))))[0].notes[0].content).toBe(text);
+  });
+  it("never salvages a nested suggestion from a truncated outer draft", async () => {
+    const fetcher = vi.fn().mockResolvedValue(response('{"suggestions":[' + JSON.stringify(suggestion)));
+    await expect(call(fetcher)).rejects.toThrow(/JSON/);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it("sends exactly the preview text and validates chapter-bound suggestions", async () => {
     const fetcher = vi.fn().mockResolvedValue(response(JSON.stringify({ suggestions: [suggestion] })));
     const result = await call(fetcher);

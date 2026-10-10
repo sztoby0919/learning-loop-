@@ -4,7 +4,7 @@ import { applyImportAi, cancelImportAi, fetchCourseImport, getImportAi, ImportRe
 const scope = (preview: CourseImportPreview) => JSON.stringify({ title: preview.draft.title, goal: preview.draft.goal, weeklyHours: preview.draft.weeklyHours, stages: preview.draft.stages.map((stage) => ({ id: stage.id, title: stage.title, source: stage.source })) });
 
 export function ImportAiPanel({ preview, flush, onPreviewChanged, onBusyChange }: { preview: CourseImportPreview; flush: () => Promise<CourseImportPreview>; onPreviewChanged: (preview: CourseImportPreview) => void; onBusyChange?: (busy: boolean) => void }) {
-  const [selected, setSelected] = useState<string[]>(() => preview.draft.stages.filter((stage) => stage.source && stage.id).map((stage) => stage.id!));
+  const [selected, setSelected] = useState<string[]>(() => preview.draft.stages.filter((stage) => stage.source && stage.id).slice(0, 5).map((stage) => stage.id!));
   const [excerpt, setExcerpt] = useState<AiExcerpt | null>(null);
   const [consent, setConsent] = useState(false);
   const [accepted, setAccepted] = useState<string[]>([]);
@@ -107,6 +107,7 @@ export function ImportAiPanel({ preview, flush, onPreviewChanged, onBusyChange }
 
   return <section className="workspace-panel import-ai"><h3>可选：AI 完善</h3>
     <p>只发送所选章节或页码分段开头最多两页，每页最多 1,200 字符，总量不超过 24,000 字符，含课程名称、目标和每周时间。不会发送完整文档。未识别章节时可按页码生成学习阶段；候选建议不会直接覆盖草稿。</p>
+    <p>默认选择前 5 个章节，建议每次完善 3–5 个，再继续处理其余章节。输出预算至少为 8,000 Token，大量章节会提高输出预算（自动增长最多到 32,000 Token），可能增加费用或耗时。</p>
     <p>临时服务错误最多自动重试一次，共用 90 秒总期限，可能增加调用费用；超时、鉴权失败、额度不足和格式错误不会自动重试。</p>
     {!preview.aiAvailable ? <p>未配置真实模型 API，当前可直接创建基础课程。</p> : <>
       <fieldset disabled={running || localBusy || Boolean(preview.candidate)}><legend>选择来源章节或页码分段</legend>{preview.draft.stages.map((stage, index) => <label key={stage.id ?? index}><input type="checkbox" aria-label={`完善 ${stage.title}`} disabled={!stage.source || !stage.id} checked={Boolean(stage.id && selected.includes(stage.id))} onChange={(event) => { setSelected(event.target.checked ? [...selected, stage.id!] : selected.filter((id) => id !== stage.id)); setExcerpt(null); setConsent(false); }} />{stage.title}{!stage.source && "（未关联原文页码，不能 AI 完善）"}</label>)}</fieldset>

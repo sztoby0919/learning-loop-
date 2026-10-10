@@ -95,10 +95,10 @@ export async function extractDocx(bytes: Uint8Array, filename: string): Promise<
       if (headingHtmlIndex >= 0) {
         const ratio = headingHtmlIndex / html.length;
         const page = Math.min(totalPages, Math.max(1, Math.floor(ratio * totalPages) + 1));
-        outline.push({ title: heading.title.slice(0, 100), page });
+        outline.push({ title: heading.title.slice(0, 100), page, level: heading.level });
         lastIndex = headingHtmlIndex + 1;
       } else {
-        outline.push({ title: heading.title.slice(0, 100), page: 1 });
+        outline.push({ title: heading.title.slice(0, 100), page: 1, level: heading.level });
       }
     }
   }
@@ -129,7 +129,7 @@ export async function extractDocx(bytes: Uint8Array, filename: string): Promise<
     title: title || filename.replace(/\.docx$/i, ""),
     pageCount: pages.length,
     pages,
-    outline: outline.slice(0, 60),
+    outline: outline.slice(0, 10000),
     warnings,
     sourceFormat: "docx",
   };

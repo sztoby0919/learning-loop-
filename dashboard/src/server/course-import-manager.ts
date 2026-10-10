@@ -18,6 +18,7 @@ import { finishImportCommit, recoverImportCommits, rollbackImportCommit, stageIm
 import { ImportAiOperations, type ImportAiEnricher } from "./course-import-ai-operations.js";
 import { buildAiExcerpt } from "./course-import-excerpt.js";
 import { applyAiSuggestions, undoAiSuggestions } from "./course-import-suggestions.js";
+import { sourceDocuments } from "./course-bundle-files.js";
 
 const MAX_PDF_BYTES = 100 * 1024 * 1024;
 const MAX_DOCX_BYTES = 50 * 1024 * 1024;
@@ -85,7 +86,11 @@ export class CourseImportManager {
 
   async list(): Promise<DraftSummary[]> {
     await this.initialize();
-    const drafts = await this.store.list();
+    const drafts: DraftSummary[] = [];
+    for (const summary of await this.store.list()) {
+      const entry = summary.status === "ready" ? await this.store.read(summary.id) : null;
+      if (!entry?.bundleId) drafts.push(summary);
+    }
     for (const issue of this.recoveryIssues) {
       const existing = drafts.find((draft) => draft.id === issue.id);
       if (existing) { existing.status = "invalid"; existing.warning = issue.warning; }
@@ -109,7 +114,7 @@ export class CourseImportManager {
     await this.store.cleanupExpired(new Set(this.recoveryIssues.map((issue) => issue.id)));
   }
 
-  async create(bytes: Uint8Array, originalFilename: string) {
+  async create(bytes: Uint8Array, originalFilename: string, bundleId?: string) {
     const isPdf = /\.pdf$/i.test(originalFilename);
     const isDocx = /\.docx$/i.test(originalFilename);
     const isText = /\.(md|txt|markdown)$/i.test(originalFilename);
@@ -133,7 +138,7 @@ export class CourseImportManager {
     await this.initialize();
     const extension = path.extname(originalFilename).toLowerCase();
     const now = Date.now();
-    await this.store.create({ version: 1, id, courseId, revision: 0, draft: createBasicDraft(source, originalFilename), source, sourceExtension: extension, createdAt: now, updatedAt: now, expiresAt: now + MAX_AGE_MS, state: "open" }, bytes);
+    await this.store.create({ version: 1, id, courseId, revision: 0, ...(bundleId ? { bundleId } : {}), draft: createBasicDraft(source, originalFilename), source, sourceExtension: extension, createdAt: now, updatedAt: now, expiresAt: now + MAX_AGE_MS, state: "open" }, bytes);
     return this.preview(id);
   }
 
@@ -220,6 +225,7 @@ export class CourseImportManager {
   }
   private async confirmLocked(id: string, expectedRevision: number): Promise<{ courseId: string }> {
     const entry = await this.store.read(id);
+    if (entry.bundleId) throw new CourseImportError("这份课件属于多文件草稿，请在合并预览中确认", 409);
     if (entry.state === "committed") return { courseId: entry.courseId };
     this.aiOperations.assertEditable(entry);
     if (entry.state === "committing" || this.active.has(id)) throw new CourseImportError("这份草稿正在创建课程，请稍候", 409);
@@ -264,10 +270,11 @@ export class CourseImportManager {
     }
   }
 
-  async cancel(id: string): Promise<void> {
+  async cancel(id: string, bundleId?: string): Promise<void> {
     await this.initialize();
     if (this.recoveryIssues.some((issue) => issue.id === id)) throw new CourseImportError("该草稿存在未决建课事务，已保留恢复数据。请先备份并处理恢复失败，不能直接删除。", 409);
     const current = await this.store.read(id).catch(() => null);
+    if (current?.bundleId && current.bundleId !== bundleId) throw new CourseImportError("请从多文件草稿中取消整批导入", 409);
     if (current?.operation?.status === "running") await this.aiOperations.cancel(id, current.operation.id);
     return this.aiOperations.withLock(id, () => this.cancelLocked(id));
   }
@@ -279,11 +286,20 @@ export class CourseImportManager {
     await this.store.delete(id);
   }
 
-  async sourcePath(courseId: string): Promise<string | null> {
+  async sourcePath(courseId: string, sourceId?: string): Promise<string | null> {
     const configured = this.options.repository.config.courses.find((course) => course.id === courseId);
     const managedRoot = path.resolve(this.courseRoot());
-    if (!configured || path.dirname(path.resolve(configured.root)) !== managedRoot) return null;
+    if (!configured) return null;
     const root = configured.root;
+    try {
+      const documents = sourceDocuments(await readFile(path.join(root, "course.md"), "utf8"));
+      if (sourceId !== undefined || documents.length) {
+        const source = sourceId === undefined ? documents.find((doc) => doc.id === "legacy") ?? documents[0] : documents.find((doc) => doc.id === sourceId);
+        if (!source) return null;
+        return path.join(root, source.storedName);
+      }
+    } catch { return null; }
+    if (sourceId !== undefined || path.dirname(path.resolve(configured.root)) !== managedRoot) return null;
     for (const ext of [".pdf", ".docx", ".md", ".txt", ".markdown", ".html", ".htm"]) {
       const candidate = path.join(root, `source${ext}`);
       try { await stat(candidate); return candidate; } catch { /* try next extension */ }
@@ -291,4 +307,21 @@ export class CourseImportManager {
     return null;
   }
   get managedCourseRoot(): string { return this.courseRoot(); }
+  get projectRoot(): string { return this.options.root; }
+  currentDate(): string { return this.options.today(); }
+  watch(root: string): void { this.options.watchCourse(root); }
+  readBundleDraft(id: string): Promise<DraftEntry> { return this.get(id); }
+  async withBundleDrafts<T>(ids: string[], action: (entries: DraftEntry[]) => Promise<T>): Promise<T> {
+    const sorted = [...ids].sort();
+    const acquire = (index: number): Promise<T> => index === sorted.length ? Promise.all(ids.map((id) => this.get(id))).then((entries) => {
+      for (const entry of entries) this.aiOperations.assertEditable(entry);
+      return action(entries);
+    }) : this.aiOperations.withLock(sorted[index], () => acquire(index + 1));
+    return acquire(0);
+  }
+  async finishBundleDraft(id: string, bundleId: string): Promise<void> {
+    const entry = await this.store.read(id, { includeExpired: true });
+    if (entry.bundleId !== bundleId || entry.state === "committed") return;
+    await this.store.replace({ ...entry, state: "committed", revision: entry.revision + 1, updatedAt: Math.min(Date.now(), entry.expiresAt - 1) }, entry.revision, { includeExpired: true });
+  }
 }

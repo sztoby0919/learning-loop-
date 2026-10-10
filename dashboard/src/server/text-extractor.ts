@@ -6,7 +6,7 @@ export class TextImportError extends Error {
   }
 }
 
-const headingPattern = /^#{1,3}\s+(.+)$/gm;
+const headingPattern = /^(#{1,6})\s+(.+)$/gm;
 
 export async function extractText(bytes: Uint8Array, originalFilename: string): Promise<ExtractedDocument> {
   const encoding = detectEncoding(bytes);
@@ -21,8 +21,8 @@ export async function extractText(bytes: Uint8Array, originalFilename: string): 
   const outline: ExtractedDocument["outline"] = [];
   let match: RegExpExecArray | null;
   while ((match = headingPattern.exec(text)) !== null) {
-    const title = match[1].trim().slice(0, 100);
-    if (title) outline.push({ title, page: Math.floor(match.index / 800) + 1 });
+    const title = match[2].trim().slice(0, 100);
+    if (title) outline.push({ title, page: Math.floor(match.index / 800) + 1, level: match[1].length });
   }
 
   // Split into simulated pages (~800 chars each)
@@ -45,7 +45,7 @@ export async function extractText(bytes: Uint8Array, originalFilename: string): 
     title: title || originalFilename.replace(/\.(md|txt|markdown)$/i, ""),
     pageCount: Math.max(1, pages.length),
     pages,
-    outline: outline.slice(0, 60),
+    outline: outline.slice(0, 10000),
     warnings: outline.length === 0 ? ["未检测到 Markdown 标题（# 标题），将使用全文作为学习内容。"] : [],
     sourceFormat: "text",
   };

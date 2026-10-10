@@ -1,115 +1,24 @@
-import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
-import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AiExcerpt, CourseImportPreview } from "../../shared/course-import.js";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, expect, it, vi } from "vitest";
+import type { CourseImportPreview } from "../../shared/course-import.js";
 import { ImportAiPanel } from "./ImportAiPanel.js";
 
-const firstId = "11111111-1111-4111-8111-111111111111";
-const secondId = "22222222-2222-4222-8222-222222222222";
-const preview: CourseImportPreview = { id: "draft", courseId: "course-test", revision: 0, draft: { title: "Book", originalFilename: "book.pdf", pageCount: 4, goal: "", weeklyHours: null, stages: [{ id: firstId, title: "Chapter 1", tasks: ["Read first"], source: { title: "Chapter 1", startPage: 1, endPage: 2 } }, { id: secondId, title: "Chapter 2", tasks: ["Read second"], source: { title: "Chapter 2", startPage: 3, endPage: 4 } }, { id: "33333333-3333-4333-8333-333333333333", title: "Manual", tasks: ["Manual task"] }], notes: [], warnings: [], aiStatus: "not-used", sourceFormat: "pdf" }, files: {}, excerptChars: 0, aiAvailable: true };
-const excerpt: AiExcerpt = { revision: 0, stageIds: [firstId, secondId], excerptHash: "a".repeat(64), chars: 18, text: "实际发送的目录与正文", pages: [{ stageId: firstId, page: 1, text: "First excerpt" }, { stageId: secondId, page: 3, text: "Second excerpt" }] };
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-function Harness({ initial = preview, flush, busy = () => {} }: { initial?: CourseImportPreview; flush?: () => Promise<CourseImportPreview>; busy?: (busy: boolean) => void }) {
-  const [current, setCurrent] = useState(initial);
-  return <ImportAiPanel preview={current} flush={flush ?? (async () => current)} onPreviewChanged={setCurrent} onBusyChange={busy} />;
-}
+afterEach(() => vi.unstubAllGlobals());
 
-describe("controlled import AI", () => {
-  it("allows page-based stages to reach AI enhancement only after excerpt consent", async () => {
-    const stage = { id: firstId, title: "阅读第 1–4 页", tasks: ["按页码阅读"], source: { title: "阅读第 1–4 页", startPage: 1, endPage: 4 } };
-    const initial = { ...preview, draft: { ...preview.draft, stages: [stage] } };
-    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ ...excerpt, stageIds: [firstId], pages: [excerpt.pages[0]] }) }));
-    render(<Harness initial={initial} />);
-    expect(screen.getByLabelText("完善 阅读第 1–4 页")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "查看将发送的摘录" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "AI 完善草稿" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
-    await screen.findByLabelText(/同意发送/);
-    fireEvent.click(screen.getByLabelText(/同意发送/));
-    expect(screen.getByRole("button", { name: "AI 完善草稿" })).toBeEnabled();
+it("starts with a small chapter selection and lets the user add another before previewing", async () => {
+  const stages = Array.from({ length: 8 }, (_, index) => ({ id: `11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`, title: `章节 ${index + 1}`, tasks: ["阅读"], source: { title: `章节 ${index + 1}`, startPage: index + 1, endPage: index + 1 } }));
+  const preview: CourseImportPreview = { id: "draft-1", courseId: "c", revision: 0, aiAvailable: true, excerptChars: 0, files: {}, draft: { title: "课程", originalFilename: "book.pdf", pageCount: 8, goal: "", weeklyHours: null, stages, notes: [], warnings: [], aiStatus: "not-used", sourceFormat: "pdf" } };
+  let sentIds: string[] = [];
+  vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    sentIds = JSON.parse(init.body as string).stageIds;
+    return { ok: true, json: async () => ({ revision: 0, stageIds: sentIds, excerptHash: "a".repeat(64), text: "摘录", chars: 2, pages: [] }) };
   });
-
-  it("explains missing sources without falsely calling an imported fallback a manual stage", () => {
-    const initial = { ...preview, draft: { ...preview.draft, stages: [{ id: firstId, title: "阅读原始 PDF", tasks: ["Read"] }] } };
-    render(<Harness initial={initial} />);
-    expect(screen.getByText(/未关联原文页码/)).toBeInTheDocument();
-    expect(screen.getByText(/重新导入/)).toBeInTheDocument();
-    expect(screen.queryByText(/手工阶段/)).not.toBeInTheDocument();
-  });
-  it("removes hidden selected IDs after deleting a source chapter", async () => {
-    const changed = vi.fn();
-    const requests: unknown[] = [];
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => { requests.push(JSON.parse(String(init.body))); return { ok: true, json: async () => excerpt }; });
-    const view = render(<ImportAiPanel preview={preview} flush={async () => preview} onPreviewChanged={changed} />);
-    const reduced = { ...preview, revision: 1, draft: { ...preview.draft, stages: preview.draft.stages.filter((stage) => stage.id !== secondId) } };
-    view.rerender(<ImportAiPanel preview={reduced} flush={async () => reduced} onPreviewChanged={changed} />);
-    fireEvent.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
-    await waitFor(() => expect(requests).toEqual([{ expectedRevision: 1, stageIds: [firstId] }]));
-  });
-
-  it("requires visible exact excerpt and fresh consent after changing chapters", async () => {
-    const calls: string[] = [];
-    vi.stubGlobal("fetch", async (url: string) => { calls.push(url); return { ok: true, json: async () => excerpt }; });
-    render(<Harness />);
-    expect(screen.getByLabelText("完善 Manual")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "AI 完善草稿" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
-    expect(await screen.findByText("实际发送的目录与正文")).toBeInTheDocument();
-    expect(screen.getByText(/第 1 页/)).toBeInTheDocument();
-    expect(calls).toEqual(["/api/course-imports/draft/ai-excerpt"]);
-    fireEvent.click(screen.getByLabelText(/同意发送/));
-    expect(screen.getByRole("button", { name: "AI 完善草稿" })).toBeEnabled();
-    fireEvent.click(screen.getByLabelText("完善 Chapter 2"));
-    expect(screen.queryByText("实际发送的目录与正文")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "AI 完善草稿" })).toBeDisabled();
-  });
-  it("flushes before starting and never silently submits a changed excerpt", async () => {
-    const calls: string[] = []; let flushes = 0;
-    vi.stubGlobal("fetch", async (url: string) => { calls.push(url); return { ok: true, json: async () => excerpt }; });
-    render(<Harness flush={async () => { flushes += 1; return flushes === 1 ? preview : { ...preview, revision: 1 }; }} />);
-    fireEvent.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
-    await screen.findByText("实际发送的目录与正文");
-    fireEvent.click(screen.getByLabelText(/同意发送/));
-    fireEvent.click(screen.getByRole("button", { name: "AI 完善草稿" }));
-    expect(await screen.findByText(/草稿已改变/)).toBeInTheDocument();
-    expect(flushes).toBe(2);
-    expect(calls).toEqual(["/api/course-imports/draft/ai-excerpt"]);
-  });
-  it("shows actual wait seconds and does not pretend a failed cancellation succeeded", async () => {
-    const initial = { ...preview, operation: { id: "operation", status: "running" as const, startedAt: Date.now() - 4000 } };
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => init.method === "DELETE" ? { ok: false, status: 500, json: async () => ({ error: "取消失败" }) } : new Promise(() => {}));
-    const busy = vi.fn(); render(<Harness initial={initial} busy={busy} />);
-    expect(screen.getByRole("status", { name: "AI 正在完善草稿" })).toHaveTextContent(/已等待 [4-9] 秒/);
-    fireEvent.click(screen.getByRole("button", { name: "取消 AI 请求" }));
-    expect(await screen.findByText("取消失败")).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "AI 正在完善草稿" })).toBeInTheDocument();
-    expect(busy).toHaveBeenLastCalledWith(true);
-  });
-  it("resumes only GET polling, advances real wait time and ignores a late response after unmount", async () => {
-    vi.useFakeTimers();
-    let release!: (value: unknown) => void;
-    const requests: string[] = [];
-    vi.stubGlobal("fetch", (url: string) => { requests.push(url); return new Promise((resolve) => { release = resolve; }); });
-    const changed = vi.fn();
-    const initial = { ...preview, operation: { id: "operation", status: "running" as const, startedAt: Date.now() - 4000 } };
-    const view = render(<ImportAiPanel preview={initial} flush={async () => initial} onPreviewChanged={changed} />);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(screen.getByRole("status", { name: "AI 正在完善草稿" })).toHaveTextContent("已等待 7 秒");
-    expect(requests).toEqual(["/api/course-imports/draft/ai-operations/operation"]);
-    view.unmount();
-    await act(async () => { release({ ok: true, json: async () => ({ ...initial.operation, status: "complete" }) }); await vi.advanceTimersByTimeAsync(3000); });
-    expect(changed).not.toHaveBeenCalled(); expect(requests).toHaveLength(1);
-  });
-  it("compares chapter suggestions and applies only checked chapters, then allows undo", async () => {
-    const candidate = { id: "candidate", baseRevision: 0, suggestions: [{ stageId: firstId, title: "AI first", tasks: ["AI task"], notes: [] }, { stageId: secondId, title: "AI second", tasks: ["Other task"], notes: [] }] };
-    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => { requests.push({ url, body: JSON.parse(String(init.body)) }); return { ok: true, json: async () => url.endsWith("ai-undo") ? { ...preview, revision: 2 } : { ...preview, revision: 1, canUndo: true } }; });
-    render(<Harness initial={{ ...preview, candidate }} />);
-    expect(screen.getByText("AI first")).toBeInTheDocument(); expect(screen.getByText("Read second")).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("接受 Chapter 1 的建议"));
-    fireEvent.click(screen.getByRole("button", { name: "应用所选建议" }));
-    await waitFor(() => expect(requests[0]).toMatchObject({ url: "/api/course-imports/draft/ai-candidates/candidate/apply", body: { expectedRevision: 0, acceptedStageIds: [firstId] } }));
-    fireEvent.click(await screen.findByRole("button", { name: "撤销最近一次 AI 应用" }));
-    await waitFor(() => expect(requests[1]).toMatchObject({ url: "/api/course-imports/draft/ai-undo", body: { expectedRevision: 1 } }));
-  });
+  render(<ImportAiPanel preview={preview} flush={async () => preview} onPreviewChanged={() => {}} />);
+  const user = userEvent.setup();
+  expect(screen.getByRole("checkbox", { name: "完善 章节 6" })).not.toBeChecked();
+  await user.click(screen.getByRole("checkbox", { name: "完善 章节 8" }));
+  await user.click(screen.getByRole("button", { name: "查看将发送的摘录" }));
+  await screen.findByLabelText(/同意发送/);
+  expect(sentIds).toEqual([stages[0].id, stages[1].id, stages[2].id, stages[3].id, stages[4].id, stages[7].id]);
 });

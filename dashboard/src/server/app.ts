@@ -28,6 +28,8 @@ import type { CourseRestoreManager } from "./course-restore.js";
 import { BACKUP_LIMITS } from "../shared/course-backup.js";
 import { backupFileIo } from "./native-file-io.js";
 import { CourseManagement, CourseManagementError } from "./course-management.js";
+import { CourseBundles } from "./course-bundles.js";
+import { bundleUpload } from "./bundle-upload.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(currentDirectory, "../../dist");
@@ -38,7 +40,7 @@ function decodeUploadFilename(name: string): string {
   return decoded.includes("\uFFFD") ? name : decoded;
 }
 
-export function createApp(repository: WorkspaceRepository, events: CourseEventBus, aiService?: AiService, imports?: CourseImportManager, mode: "real" | "mock" = "mock", restores?: CourseRestoreManager) {
+export function createApp(repository: WorkspaceRepository, events: CourseEventBus, aiService?: AiService, imports?: CourseImportManager, mode: "real" | "mock" = "mock", restores?: CourseRestoreManager, bundleManager?: CourseBundles) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
@@ -103,6 +105,20 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
   });
 
   if (imports) {
+    const bundles = bundleManager ?? new CourseBundles(imports, repository, events);
+    app.post("/api/course-bundles", bundleUpload(), async (request, response, next) => {
+      try {
+        const files = request.files as Express.Multer.File[] | undefined;
+        const target = request.body?.targetCourseId;
+        if (target !== undefined && (typeof target !== "string" || !/^[a-z0-9][a-z0-9-]{0,99}$/.test(target))) throw new CourseImportError("目标课程 ID 无效", 400);
+        response.status(201).json(await bundles.create((files ?? []).map((file) => ({ bytes: file.buffer, filename: decodeUploadFilename(file.originalname) })), target));
+      } catch (error) { next(error); }
+    });
+    app.get("/api/course-bundles", async (_request, response, next) => { try { response.json(await bundles.list()); } catch (error) { next(error); } });
+    app.get("/api/course-bundles/:id", async (request, response, next) => { try { response.json(await bundles.preview(request.params.id as string)); } catch (error) { next(error); } });
+    app.patch("/api/course-bundles/:id", async (request, response, next) => { try { response.json(await bundles.updateTitle(request.params.id as string, request.body)); } catch (error) { next(error); } });
+    app.post("/api/course-bundles/:id/confirm", async (request, response, next) => { try { response.status(201).json(await bundles.confirm(request.params.id as string, request.body)); } catch (error) { next(error); } });
+    app.delete("/api/course-bundles/:id", async (request, response, next) => { try { await bundles.cancel(request.params.id as string); response.status(204).end(); } catch (error) { next(error); } });
     const backups = new CourseBackupService(repository, imports, new BackupZipCodec());
     app.get("/api/backups/preview", async (request, response, next) => {
       try { const id = request.query.courseId; if (id !== undefined && typeof id !== "string") throw new BackupError("请选择单个有效课程", 400); response.json(await backups.preview(id === undefined ? undefined : [id])); }
@@ -172,14 +188,16 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     app.delete("/api/course-imports/:id", async (request, response, next) => {
       try { await imports.cancel(request.params.id as string); response.status(204).end(); } catch (error) { next(error); }
     });
-    app.get("/api/courses/:id/source", async (request, response, next) => {
-      const filePath = await safeSourcePath(repository, imports, request.params.id as string);
+    const serveSource: import("express").RequestHandler = async (request, response, next) => {
+      const filePath = await safeSourcePath(repository, imports, request.params.id as string, request.params.sourceId as string | undefined);
       if (!filePath) { response.status(404).json({ error: "未找到原始文件" }); return; }
       const contentType = filePath.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : /\.html?$/.test(filePath) ? "text/html; charset=utf-8" : /\.(md|markdown|txt)$/.test(filePath) ? "text/plain; charset=utf-8" : "application/pdf";
       response.setHeader("X-Content-Type-Options", "nosniff");
       if (/\.html?$/.test(filePath)) response.setHeader("Content-Security-Policy", "sandbox");
       response.type(contentType).sendFile(filePath, (error) => { if (error && !response.headersSent) next(error); });
-    });
+    };
+    app.get("/api/courses/:id/source", serveSource);
+    app.get("/api/courses/:id/sources/:sourceId", serveSource);
   }
 
   const aggregate = <T>(pathName: string, loader: () => Promise<T>) => {
@@ -297,7 +315,7 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
   });
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-    if (error instanceof AiRequestError) { response.status(error.status).json({ error: error.message }); return; }
+    if (error instanceof AiRequestError) { response.status(error.status).json({ error: error.message, retryable: error.retryable || error.status === 504 }); return; }
     if (error instanceof CourseManagementError) { response.status(error.status).json({ error: error.message }); return; }
     if (error instanceof BackupError) { response.status(error.status).json({ error: error.message }); return; }
     if (error instanceof CourseImportError) { response.status(error.status).json({ error: error.message }); return; }
@@ -307,13 +325,18 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
     if (error instanceof DocxImportError) { response.status(error.code === "TOO_MANY_PAGES" ? 413 : 422).json({ error: error.message }); return; }
     if (error instanceof HtmlImportError) { response.status(422).json({ error: error.message }); return; }
     if (error instanceof TextImportError) { response.status(422).json({ error: error.message }); return; }
-    if (error instanceof multer.MulterError) { response.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ error: error.code === "LIMIT_FILE_SIZE" ? (_request.path.startsWith("/api/restores") ? "ZIP 超过 250 MiB 上传上限，请分课程备份" : "文件超过 100 MB 上传上限，请压缩或拆分后导入；Word 上限 50 MB、HTML 上限 20 MB、文本上限 10 MB") : "请只上传一个文件" }); return; }
+    if (error instanceof multer.MulterError) {
+      const message = error.code === "LIMIT_FILE_SIZE"
+        ? (_request.path.startsWith("/api/restores") ? "ZIP 超过 250 MiB 上传上限，请分课程备份" : "文件超过 100 MB 上传上限，请压缩或拆分后导入；Word 上限 50 MB、HTML 上限 20 MB、文本上限 10 MB")
+        : (_request.path.startsWith("/api/course-bundles") ? "每批最多上传 10 个课件，请分批追加；请使用 files 字段上传" : "请只上传一个文件");
+      response.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ error: message }); return;
+    }
     if (error instanceof AssessmentError) {
-      response.status(error.status).json({ error: error.message });
+      response.status(error.status).json({ error: error.message, retryable: error.status === 502 });
       return;
     }
     if (error instanceof AiResponseFormatError) {
-      response.status(502).json({ error: error.message });
+      response.status(502).json({ error: error.message, retryable: error.retryable });
       return;
     }
     if (error instanceof ArchiveProposalError) {

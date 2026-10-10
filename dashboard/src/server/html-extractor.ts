@@ -6,7 +6,7 @@ export class HtmlImportError extends Error {
   }
 }
 
-const headingPattern = /<h([1-3])[^>]*>([\s\S]*?)<\/h\1>/gi;
+const headingPattern = /<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi;
 const tagStripPattern = /<[^>]*>/g;
 const entityPattern = /&(?:amp|lt|gt|quot|nbsp|#\d+);/g;
 const entityMap: Record<string, string> = {
@@ -92,9 +92,9 @@ export async function extractHtml(bytes: Uint8Array, originalFilename: string): 
     title: title || originalFilename.replace(/\.html?$/i, ""),
     pageCount: Math.max(1, pages.length),
     pages,
-    outline: headings.slice(0, 60).map((h) => {
+    outline: headings.slice(0, 10000).map((h) => {
       const headingIndex = text.indexOf(h.title);
-      return { title: h.title, page: Math.max(1, Math.floor(Math.max(0, headingIndex) / charsPerPage) + 1) };
+      return { title: h.title, page: Math.max(1, Math.floor(Math.max(0, headingIndex) / charsPerPage) + 1), level: h.level };
     }),
     warnings,
     sourceFormat: "text",

@@ -110,30 +110,41 @@ export class PracticeManager {
       contextParts.push(`复习知识点：${topic}`, "请围绕该知识点生成一道四选一单选复习题，知识点字段必须与复习知识点完全一致。");
     }
     const context = contextParts.join("\n");
+    let instructions = `只生成一道简洁的四选一单选题，explanation 控制在 160 字以内。knowledgePoint 必须原样填写为 ${JSON.stringify(topic || course.title)}。${sourceQuestion ? `题干不得复用原题 ${JSON.stringify(sourceQuestion)}，请换用新情境。` : ""}`;
     let generated: AssessmentQuestion[];
-    try {
-      generated = await this.aiService.generateAssessmentQuestions({
-        courseId: params.courseId,
-        topic: topic || course.title,
-        count: 1,
-        context,
-      });
-    } catch (error) {
-      if (error instanceof AiResponseFormatError || error instanceof AiRequestError) throw error;
-      throw new AssessmentError("生成练习题失败，请稍后重试", 502);
-    }
-    if (
-      !validateAssessmentQuestions(generated).success
-      || generated.length !== 1
-      || !generated[0].question.trim()
-      || !generated[0].explanation.trim()
-      || !generated[0].knowledgePoint.trim()
-      || new Set(generated[0].options.map(normalizeOption)).size !== 4
-      || (sourceQuestion && normalizeQuestion(generated[0].question) === normalizeQuestion(sourceQuestion))
-      || (topic && normalizeQuestion(generated[0].knowledgePoint) !== normalizeQuestion(topic))
-      || hasAnswerCue(generated[0])
-    ) {
-      throw new AssessmentError("模型生成的练习题无效或与原题相同，请重试", 502);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        generated = await this.aiService.generateAssessmentQuestions({
+          courseId: params.courseId,
+          topic: topic || course.title,
+          count: 1,
+          context,
+          instructions,
+        });
+        if (
+          !validateAssessmentQuestions(generated).success
+          || generated.length !== 1
+          || !generated[0].question.trim()
+          || !generated[0].explanation.trim()
+          || !generated[0].knowledgePoint.trim()
+          || new Set(generated[0].options.map(normalizeOption)).size !== 4
+          || hasAnswerCue(generated[0])
+        ) {
+          throw new AssessmentError("模型生成的练习题格式无效、选项重复或泄露答案，请重试", 502);
+        }
+        if (topic && normalizeQuestion(generated[0].knowledgePoint) !== normalizeQuestion(topic))
+          throw new AssessmentError(`生成题目的知识点与${params.kind === "review-attempt" ? "复习主题" : "原错题"}不一致，请重试`, 502);
+        if (sourceQuestion && normalizeQuestion(generated[0].question) === normalizeQuestion(sourceQuestion))
+          throw new AssessmentError("模型生成的练习题与原题相同，请重试", 502);
+        break;
+      } catch (error) {
+        if (params.kind === "review-attempt" && attempt < 2 && (error instanceof AssessmentError && error.status === 502 || error instanceof AiResponseFormatError && error.retryable)) {
+          instructions += `\n上次输出未通过校验：${error.message}。请针对该原因重新生成，不要重复上次的输出。`;
+          continue;
+        }
+        if (error instanceof AssessmentError || error instanceof AiResponseFormatError || error instanceof AiRequestError) throw error;
+        throw new AssessmentError("生成练习题失败，请稍后重试", 502);
+      }
     }
     const question = this.mode === "mock"
       ? { ...generated[0], question: `【离线演示】${generated[0].question}` }

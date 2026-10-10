@@ -35,6 +35,11 @@ function mockUpload(preview: unknown, responses?: Array<{ status: number; body: 
 }
 
 describe("CourseImportPage", () => {
+  it("允许在新建课程入口一次选择多份课件", () => {
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => [] }));
+    render(<MemoryRouter><CourseImportPage /></MemoryRouter>);
+    expect(screen.getByLabelText("选择文件")).toHaveAttribute("multiple");
+  });
   it("protects dirty and invalid input from SPA links and history navigation", async () => {
     const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
     vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => first }));
@@ -82,7 +87,7 @@ describe("CourseImportPage", () => {
     mockUpload({ ...first, revision: 0 });
     let reloads = 0;
     vi.stubGlobal("fetch", async (input: string, init: RequestInit) => {
-      if (input === "/api/course-imports") return { ok: true, json: async () => [] };
+      if (input === "/api/course-imports" || input === "/api/course-bundles") return { ok: true, json: async () => [] };
       if (init.method === "PATCH") return { ok: false, status: 409, json: async () => ({ error: "另一个标签页已保存修改" }) };
       reloads += 1;
       return { ok: true, json: async () => ({ ...first, revision: 1, draft: { ...first.draft, title: "服务器版本" } }) };
@@ -119,7 +124,7 @@ describe("CourseImportPage", () => {
     await user.type(screen.getByLabelText("课程名称"), "我的课程");
     await user.click(screen.getByRole("button", { name: "确认创建课程" }));
     await waitFor(() => expect(screen.getByText("课程已创建")).toBeInTheDocument());
-    expect(calls).toEqual(["GET /api/course-imports", "PATCH /api/course-imports/draft-1", "POST /api/course-imports/draft-1/confirm"]);
+    expect(calls).toEqual(["GET /api/course-imports", "GET /api/course-bundles", "PATCH /api/course-imports/draft-1", "POST /api/course-imports/draft-1/confirm"]);
   });
 
   it("never calls AI until the user checks the data-sharing consent", async () => {

@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 
 import type { CourseSummary, NoteDocument, SourceReference } from "../../shared/course.js";
-import { SourcedMarkdown } from "../components/SourceReference.js";
+import { isCourseSourceUrl, SourcedMarkdown } from "../components/SourceReference.js";
 
 interface NotesPageProps {
   courses: CourseSummary[];
@@ -48,7 +48,7 @@ export function NotesPage({ courses, notes, selectedId, sourceReferences = [] }:
       <div className="notes-documents">
         {visibleNotes.length === 0 ? <p className="empty-copy">暂无可显示的笔记内容。</p> : visibleNotes.map((note) => (
           <article className="workspace-panel markdown-body" key={note.courseId} style={{ borderTopColor: note.accent ?? courseMeta.get(note.courseId)?.accent }}>
-            <SourcedMarkdown markdown={note.markdown} artifact="notes" references={sourceReferences.filter((reference) => reference.artifact === "notes" && reference.sourceUrl.split("#")[0] === `/api/courses/${encodeURIComponent(note.courseId)}/source`)} />
+            <SourcedMarkdown markdown={note.markdown} artifact="notes" references={sourceReferences.filter((reference) => reference.artifact === "notes" && isCourseSourceUrl(reference.sourceUrl, note.courseId))} />
           </article>
         ))}
       </div>

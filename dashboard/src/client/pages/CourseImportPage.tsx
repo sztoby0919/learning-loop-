@@ -1,7 +1,9 @@
 import { useState, useCallback, useRef, useEffect, type ChangeEvent, type DragEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { cancelCourseImport, confirmCourseImport, fetchCourseImport, listCourseImports, uploadCourseFile, type CourseImportPreview, type UploadProgressCallback } from "../api.js";
+import { cancelCourseBundle, cancelCourseImport, confirmCourseImport, fetchCourseImport, listCourseBundles, listCourseImports, uploadCourseFile, type CourseImportPreview, type UploadProgressCallback } from "../api.js";
+import type { CourseBundleSummary } from "../../shared/course-bundle.js";
+import { CourseBundlePage } from "./CourseBundlePage.js";
 import type { DraftSummary } from "../../shared/course-import.js";
 import { useImportAutosave } from "../hooks/useImportAutosave.js";
 import { ImportQualityReport } from "../components/ImportQualityReport.js";
@@ -9,6 +11,12 @@ import { ImportAiPanel } from "../components/ImportAiPanel.js";
 import { ImportNavigationGuard } from "../components/ImportNavigationGuard.js";
 
 export function CourseImportPage() {
+  const [files, setFiles] = useState<File[]>([]);
+  const [params, setParams] = useSearchParams();
+  if (params.has("bundle") || params.has("append") || params.has("multi")) return <CourseBundlePage initialFiles={files} />;
+  return <SingleCourseImportPage onMultiple={(files) => { setFiles(files); setParams({ multi: "1" }, { replace: true }); }} />;
+}
+function SingleCourseImportPage({ onMultiple }: { onMultiple: (files: File[]) => void }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [preview, setPreview] = useState<CourseImportPreview | null>(null);
@@ -20,6 +28,7 @@ export function CourseImportPage() {
   const [lastUpload, setLastUpload] = useState<File | null>(null);
   const uploadLock = useRef(false);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  const [bundles, setBundles] = useState<CourseBundleSummary[]>([]);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const autosave = useImportAutosave(preview, setPreview);
   const structuralBusy = busy || autosave.status === "saving";
@@ -33,6 +42,7 @@ export function CourseImportPage() {
       void fetchCourseImport(requestedDraft).then((saved) => { if (active) { setPreview(saved); setError(null); } }).catch((cause) => { if (active) handleError(cause); }).finally(() => { if (active) setBusy(false); });
     } else if (!preview) {
       void listCourseImports().then((entries) => { if (active) setDrafts(Array.isArray(entries) ? entries : []); }).catch(() => { if (active) setRecoveryError("暂时无法读取已保存草稿，请稍后重新打开此页。"); });
+      void listCourseBundles().then((entries) => { if (active) setBundles(Array.isArray(entries) ? entries : []); }).catch(() => { if (active) setRecoveryError("暂时无法读取多文件草稿，请稍后重新打开此页。"); });
     }
     return () => { active = false; };
   }, [requestedDraft]);
@@ -70,16 +80,18 @@ export function CourseImportPage() {
   }, []);
 
   const upload = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) await doUpload(file);
+    const files = Array.from(event.target.files ?? []);
+    if (files.length > 1) onMultiple(files);
+    else if (files[0]) await doUpload(files[0]);
   };
 
   const handleDrop = useCallback((event: DragEvent) => {
     event.preventDefault();
     setDragOver(false);
-    const file = event.dataTransfer.files[0];
-    if (file) void doUpload(file);
-  }, [doUpload]);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length > 1) onMultiple(files);
+    else if (files[0]) void doUpload(files[0]);
+  }, [doUpload, onMultiple]);
 
   const handleDragOver = useCallback((event: DragEvent) => {
     event.preventDefault();
@@ -160,6 +172,7 @@ export function CourseImportPage() {
   return <div className="workspace-page import-page">
     <ImportNavigationGuard hasUnsavedChanges={autosave.hasUnsavedChanges} />
     <div className="section-heading"><h2>从文档创建课程</h2><span>本地单用户 · PDF / Word / Markdown / HTML</span></div>
+    {!preview && !requestedDraft && bundles.length > 0 && <section className="workspace-panel"><h3>继续多文件或追加课件草稿</h3>{bundles.map((bundle) => <div className="import-recovery-entry" key={bundle.id}><span>{bundle.title}{bundle.targetCourseId ? "（追加课件）" : "（多文件）"}</span>{bundle.warning && <span role="alert">{bundle.warning}</span>}<button type="button" disabled={busy || Boolean(bundle.warning)} onClick={() => setSearchParams({ bundle: bundle.id, ...(bundle.targetCourseId ? { append: bundle.targetCourseId } : {}) })}>继续编辑</button><button type="button" disabled={busy || Boolean(bundle.warning)} onClick={() => { if (!window.confirm("删除整批草稿和上传副本？已有课程不会被修改。")) return; setBusy(true); void cancelCourseBundle(bundle.id).then(() => setBundles((entries) => entries.filter((entry) => entry.id !== bundle.id))).catch(handleError).finally(() => setBusy(false)); }}>删除整批草稿</button></div>)}</section>}
     {!preview && !requestedDraft && <section className="workspace-panel import-recovery"><h3>继续已保存的草稿</h3><p>草稿自上传起保留 7 天，编辑不会延长有效期。只有显示“已保存”的内容可以恢复。</p>{recoveryError && <p>{recoveryError}</p>}{drafts.map((draft) => <div className="import-recovery-entry" key={draft.id}><span>{draft.title}</span><span>到期：{new Date(draft.expiresAt).toLocaleString()}</span>{draft.warning && <span>{draft.warning}</span>}<div className="import-actions"><button type="button" disabled={busy || draft.status !== "ready"} onClick={() => setSearchParams({ draft: draft.id })}>继续编辑</button><button type="button" aria-label={`删除${draft.title}草稿`} disabled={busy} onClick={() => void deleteDraft(draft)}>删除草稿</button></div></div>)}</section>}
     {!preview && <section
       className={`workspace-panel import-upload ${dragOver ? "drag-over" : ""}`}
@@ -169,7 +182,8 @@ export function CourseImportPage() {
     >
       <h3>上传课件或教材</h3>
       <p>自动提取文字和目录，先预览草稿，再决定是否创建课程。支持 PDF、Word (.docx)、Markdown (.md/.txt) 和 HTML；不支持扫描版或加密文件。</p>
-      <label>选择文件<input aria-label="选择文件" type="file" accept={acceptTypes} onChange={(event) => void upload(event)} disabled={busy} /></label>
+      <label>选择文件<input aria-label="选择文件" type="file" multiple accept={acceptTypes} onChange={(event) => void upload(event)} disabled={busy} /></label>
+      <p>支持一次选择多份课件合成一门课程，每批最多 10 个文件、总计 200 MB；各文件的来源与 PDF 页码分别保留。</p>
       <small>PDF 最大 100 MB / Word 最大 50 MB / HTML 最大 20 MB / 文本最大 10 MB，最多 1,000 页或等价文本长度；原文档会保存在新课程资料中。</small>
       {uploadProgress !== null && (
         <div className="import-progress">
@@ -203,7 +217,7 @@ export function CourseImportPage() {
         {preview.draft.warnings.length > 0 && <div className="import-warnings"><strong>导入提醒</strong><ul>{preview.draft.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}
       </section>
       <ImportQualityReport quality={preview.draft.quality} sourceUrl={preview.sourceUrl} />
-      <section className="workspace-panel import-stages"><h3>学习阶段与任务</h3><p>可以修改标题与任务；完成情况需在学习后记录。</p>
+      <section className="workspace-panel import-stages"><h3>学习阶段与任务</h3><p>一个知识点对应一个阶段，定义、例题和练习放在阶段任务中。可以修改标题与任务；完成情况需在学习后记录。</p>
         {preview.draft.stages.map((stage, index) => <div className="import-stage" key={stage.id ?? index}>
           <div className="import-stage-header">
             <label>阶段 {index + 1}<input aria-label={`阶段 ${index + 1}`} value={stage.title} onChange={(event) => changeStage(index, { title: event.target.value })} disabled={busy} /></label>

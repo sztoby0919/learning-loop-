@@ -58,7 +58,7 @@ describe("PDF text extraction", () => {
 
   it("reads nested bookmarks even when the parent has no destination", async () => {
     const result = await extractPdf(nestedOutlinePdf(), "nested.pdf");
-    expect(result.outline).toEqual([{ title: "Nested lesson", page: 1 }]);
+    expect(result.outline).toEqual([{ title: "Nested lesson", page: 1, level: 2 }]);
   });
 
   it("measures title typography only on its own line even when body fragments repeat title words", async () => {

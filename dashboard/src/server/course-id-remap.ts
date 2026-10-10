@@ -21,6 +21,7 @@ function association(raw: string, key: string, oldId: string, newId: string): st
 function resourceUrls(raw: string, oldId: string, newId: string): string {
   const prefix = `/api/courses/${oldId}/source`;
   const replacement = `/api/courses/${newId}/source`;
+  const isSourceUrl = (value: string) => value === prefix || new RegExp(`^${prefix}(?:#page=[1-9]\\d*|s/(?:legacy|[0-9a-f-]{36})(?:#page=[1-9]\\d*)?)$`).test(value);
   const content = matter(raw).content;
   const offset = raw.length - content.length;
   const tree = unified().use(remarkParse).use(remarkGfm).parse(content) as Root;
@@ -37,11 +38,11 @@ function resourceUrls(raw: string, oldId: string, newId: string): string {
       const text = raw.slice(start, end);
       // A single plain URL or single Markdown link; never rewrite labels or prose.
       const plain = text.trim();
-      if (plain === prefix || new RegExp(`^${prefix}#page=[1-9]\\d*$`).test(plain)) {
+      if (isSourceUrl(plain)) {
         changes.push({ start, end, value: text.replace(prefix, replacement) });
       } else if (cell.children.length === 1 && cell.children[0].type === "link") {
         const link = cell.children[0];
-        if (link.url === prefix || new RegExp(`^${prefix}#page=[1-9]\\d*$`).test(link.url)) {
+        if (isSourceUrl(link.url)) {
           const destination = text.lastIndexOf(`](${link.url})`);
           if (destination >= 0) changes.push({ start: start + destination + 2, end: start + destination + 2 + link.url.length, value: link.url.replace(prefix, replacement) });
         }

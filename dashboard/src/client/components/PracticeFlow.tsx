@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { CourseId, PracticeChoice, PracticeSessionCreated } from "../../shared/course.js";
 import type { AnswerFeedback } from "../../server/ai-types.js";
-import { answerPracticeSession, confirmPracticeSession, createPracticeSession, createReviewSession } from "../api.js";
+import { answerPracticeSession, confirmPracticeSession, createPracticeSession, createReviewSession, ImportRequestError } from "../api.js";
 
 type Phase = "idle" | "creating" | "question" | "answering" | "unknown" | "feedback" | "confirming" | "saved";
 
@@ -17,20 +17,40 @@ export function PracticeFlow({ courseId, mistakeId, topic, onSaved }: PracticeFl
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const feedbackElement = useRef<HTMLDivElement>(null);
+  const generation = useRef<AbortController | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const attempts = useRef(0);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (phase === "feedback") feedbackElement.current?.focus();
   }, [phase]);
 
-  async function start() {
+  useEffect(() => () => { generation.current?.abort(); clearTimeout(retryTimer.current); }, []);
+
+  async function start(controller = new AbortController()) {
+    if (controller.signal.aborted) return;
+    if (generation.current !== controller) { generation.current?.abort(); clearTimeout(retryTimer.current); attempts.current = 0; }
+    generation.current = controller;
+    setAttempt(++attempts.current);
     setError("");
     setPhase("creating");
     try {
-      setSession(await (topic !== undefined ? createReviewSession(courseId, topic) : createPracticeSession(courseId, mistakeId!)));
+      const created = await (topic !== undefined ? createReviewSession(courseId, topic, controller.signal) : createPracticeSession(courseId, mistakeId!, controller.signal));
+      if (controller.signal.aborted) return;
+      setSession(created);
       setChoice(null);
       setFeedback(null);
       setPhase("question");
     } catch (cause) {
+      if (controller.signal.aborted) return;
+      const retryable = cause instanceof ImportRequestError ? cause.retryable ?? [502, 503, 504].includes(cause.status) : cause instanceof TypeError || cause instanceof SyntaxError;
+      if (isReview && retryable) {
+        const delay = Math.min(30_000, 1000 * 2 ** Math.min(attempts.current - 1, 5));
+        setError(`${cause instanceof Error ? cause.message : String(cause)}。${delay / 1000} 秒后自动重试。`);
+        retryTimer.current = setTimeout(() => { void start(controller); }, delay);
+        return;
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase("idle");
     }
@@ -69,8 +89,9 @@ export function PracticeFlow({ courseId, mistakeId, topic, onSaved }: PracticeFl
 
   return (
     <div className="practice-flow">
-      {phase === "idle" && <button type="button" className="btn btn--primary" onClick={start}>{isReview ? "开始复习" : "针对这道错题再练"}</button>}
-      {phase === "creating" && <p role="status">{isReview ? "正在生成复习题…" : "正在生成针对性新题…"}</p>}
+      {phase === "idle" && <button type="button" className="btn btn--primary" onClick={() => { void start(); }}>{isReview ? "开始复习" : "针对这道错题再练"}</button>}
+      {phase === "creating" && <p role="status">{isReview ? `正在生成复习题…第 ${attempt} 次尝试` : "正在生成针对性新题…"}</p>}
+      {phase === "creating" && <button type="button" className="btn" onClick={() => { generation.current?.abort(); clearTimeout(retryTimer.current); setError(""); setPhase("idle"); }}>取消生成</button>}
       {session && (phase === "question" || phase === "answering" || phase === "unknown" || phase === "feedback" || phase === "confirming") && (
         <section aria-label={isReview ? "复习作答" : "针对性练习"}>
           {session.mode === "mock" && <p className="practice-mode" role="note">Mock · 离线演示题，不代表真实掌握</p>}
@@ -91,7 +112,7 @@ export function PracticeFlow({ courseId, mistakeId, topic, onSaved }: PracticeFl
               <button type="button" className="btn btn--primary" disabled={!choice || phase === "answering"} onClick={submit}>提交回答</button>
             </>
           )}
-          {phase === "unknown" && <button type="button" className="btn btn--primary" onClick={start}>重新生成新题</button>}
+          {phase === "unknown" && <button type="button" className="btn btn--primary" onClick={() => { void start(); }}>重新生成新题</button>}
           {feedback && (phase === "feedback" || phase === "confirming") && (
             <div className="practice-feedback" role="status" aria-label="练习反馈" aria-live="polite" tabIndex={-1} ref={feedbackElement}>
               <p>{feedback.isCorrect ? "回答正确" : "回答错误"} · 得分：{feedback.score} / 100</p>

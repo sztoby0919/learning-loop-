@@ -58,4 +58,11 @@ describe("CourseDetailPage", () => {
     render(<MemoryRouter><CourseDetailPage course={course} sourceReferences={[staleReference]} /></MemoryRouter>);
     expect(screen.queryByRole("link", { name: /打开原文件/ })).not.toBeInTheDocument();
   });
+  it("显示同课程多文件来源卡及文件名，拒绝跨课程来源", () => {
+    const source: SourceReference = { artifact: "course", headingIndex: 0, heading: "正则表达式", kind: "pdf-page", position: 2, filename: "lecture.pdf", sourceUrl: "/api/courses/compiler-principles/sources/11111111-1111-4111-8111-111111111111#page=2", verifiedExcerpt: null, aiDerived: false };
+    render(<MemoryRouter><CourseDetailPage course={course} sourceReferences={[source]} /></MemoryRouter>);
+    expect(screen.getByRole("link", { name: /打开原文件/ })).toHaveAttribute("href", source.sourceUrl);
+    expect(screen.getByText("lecture.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "追加课件" })).toHaveAttribute("href", "/courses/import?append=compiler-principles");
+  });
 });

@@ -9,7 +9,7 @@ export interface ExtractedDocument {
   title: string;
   pageCount: number;
   pages: Array<{ page: number; text: string }>;
-  outline: Array<{ title: string; page: number }>;
+  outline: Array<{ title: string; page: number; level?: number }>;
   warnings: string[];
   sourceFormat: "pdf" | "docx" | "text";
   quality?: PdfQuality;
@@ -48,6 +48,7 @@ export interface ImportDraft {
 }
 
 export interface DraftEntry {
+  bundleId?: string;
   version: 1;
   id: string;
   courseId: string;

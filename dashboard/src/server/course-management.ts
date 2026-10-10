@@ -12,6 +12,7 @@ import type { WorkspaceRepository } from "./workspace-repository.js";
 import type { CourseEventBus } from "./course-events.js";
 import type { CourseEditSnapshot } from "../shared/course-management.js";
 import type { RootContent } from "mdast";
+import { withCourseMutation } from "./course-mutation-lock.js";
 
 export class CourseManagementError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -80,6 +81,11 @@ export class CourseManagement {
     return { expectedHash, title: course.title, overviewMarkdown: course.overviewMarkdown, stages: course.stages.map((stage, sourceStage) => ({ ...stage, sourceStage, tasks: stage.tasks.map((task, sourceTask) => ({ ...task, sourceTask })) })) };
   }
   async mutate(id: string, input: unknown, deleting: boolean) {
+    const configured = this.repository.config.courses.find((course) => course.id === id);
+    if (!configured) throw new CourseManagementError("未知课程", 404);
+    return withCourseMutation(path.resolve(configured.root), () => this.mutateLocked(id, input, deleting));
+  }
+  private async mutateLocked(id: string, input: unknown, deleting: boolean) {
     if (this.busy.has(id)) throw new CourseManagementError("课程正在保存，请稍后重试", 409);
     this.busy.add(id);
     try {

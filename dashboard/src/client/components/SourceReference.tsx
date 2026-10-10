@@ -8,6 +8,13 @@ import { unified } from "unified";
 
 import type { SourceReference as SourceReferenceData } from "../../shared/course.js";
 
+export function isCourseSourceUrl(url: string, courseId: string): boolean {
+  const base = `/api/courses/${encodeURIComponent(courseId)}/`;
+  const path = url.split("#")[0];
+  if (!path.startsWith(base)) return false;
+  return /^source$|^sources\/(?:legacy|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.test(path.slice(base.length));
+}
+
 function textOf(node: unknown): string {
   if (!node || typeof node !== "object") return "";
   const value = node as { value?: unknown; children?: unknown[] };
@@ -23,6 +30,7 @@ export function SourceReference({ reference }: { reference: SourceReferenceData 
   return (
     <aside className="source-reference" aria-label={`来源：${reference.heading}`}>
       <span className="source-reference__label">来源</span>
+      {reference.filename && <span>{reference.filename}</span>}
       <span>{position}</span>
       {excerpt && <p>原文摘录：{excerpt}</p>}
       <a href={reference.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`打开原文件：${reference.heading}`}>打开原文件</a>

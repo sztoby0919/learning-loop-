@@ -8,6 +8,49 @@ const params = { courseId: "c", topic: "训练集", count: 1, context: "训练�
 const question = { id: "q1", question: "训练集的用途？", options: ["拟合参数", "最终评估", "删除参数", "展示界面"], answer: "A", explanation: "训练集用于拟合参数。", knowledgePoint: "训练集" };
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+it("recovers from a malformed model JSON response within the existing deadline", async () => {
+  vi.useFakeTimers();
+  let attempts = 0;
+  const prompts: string[] = [];
+  vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => { prompts.push(JSON.parse(String(init.body)).messages[0].content); return { ok: true, json: async () => ({ choices: [{ message: { content: ++attempts === 1 ? "{broken" : JSON.stringify([question]) } }] }) }; });
+  const result = new AiService({ provider: new OpenAiCompatibleProvider(config), timeoutMs: 5000 }).generateAssessmentQuestions(params);
+  const outcome = result.catch((error) => error);
+  await vi.advanceTimersByTimeAsync(1001);
+  expect(await outcome).toEqual([question]);
+  expect(attempts).toBe(2);
+  expect(prompts[1]).toContain("上次输出未通过校验");
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("stops after one format retry without exposing malformed model text", async () => {
+  vi.useFakeTimers();
+  let attempts = 0;
+  vi.stubGlobal("fetch", async () => { attempts++; return { ok: true, json: async () => ({ choices: [{ message: { content: "private-output {broken" } }] }) }; });
+  const outcome = new AiService({ provider: new OpenAiCompatibleProvider(config), timeoutMs: 5000 }).generateAssessmentQuestions(params).catch((error) => error);
+  await vi.advanceTimersByTimeAsync(2001);
+  expect(await outcome).toMatchObject({ message: expect.stringContaining("JSON") });
+  expect((await outcome).message).not.toContain("private-output");
+  expect(attempts).toBe(2);
+});
+
+it("increases a truncated single-question budget with a ceiling instead of repeating the same budget", async () => {
+  const budgets: number[] = [];
+  vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => { budgets.push(JSON.parse(String(init.body)).max_tokens); return { ok: true, json: async () => ({ choices: [{ finish_reason: "length", message: { content: "[{" } }] }) }; });
+  await expect(new AiService({ provider: new OpenAiCompatibleProvider(config) }).generateAssessmentQuestions(params)).rejects.toThrow(/截断/);
+  expect(budgets).toEqual([2000, 4000, 8000, 16_000]);
+});
+
+it("does not start a format retry after the operation deadline expires", async () => {
+  vi.useFakeTimers();
+  let attempts = 0;
+  vi.stubGlobal("fetch", async () => { attempts++; return { ok: true, json: async () => ({ choices: [{ message: { content: "{broken" } }] }) }; });
+  const outcome = new AiService({ provider: new OpenAiCompatibleProvider(config), timeoutMs: 100 }).generateAssessmentQuestions(params).catch((error) => error);
+  await vi.advanceTimersByTimeAsync(2001);
+  expect(await outcome).toMatchObject({ status: 504 });
+  expect(attempts).toBe(1);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it("aborts the underlying model request on timeout instead of leaving it running or retrying", async () => {
   vi.useFakeTimers();
   let signal: AbortSignal | undefined; let attempts = 0;

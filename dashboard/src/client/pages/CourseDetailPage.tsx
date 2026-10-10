@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import type { CourseDetail, SourceReference } from "../../shared/course.js";
 import { MarkdownContent } from "../components/MarkdownContent.js";
-import { SourcedMarkdown } from "../components/SourceReference.js";
+import { isCourseSourceUrl, SourcedMarkdown } from "../components/SourceReference.js";
 import { CourseManagementPanel } from "../components/CourseManagementPanel.js";
 
 export function CourseDetailPage({ course, sourceReferences = [] }: { course: CourseDetail; sourceReferences?: SourceReference[] }) {
@@ -40,6 +40,8 @@ export function CourseDetailPage({ course, sourceReferences = [] }: { course: Co
 
       <Link className="btn btn--primary" to={`/courses/${course.id}/coach`}>开始诊断</Link>
       <Link className="btn" to={`/courses/${course.id}/mistakes`}>查看错题本</Link>
+      <Link className="btn" to={`/courses/import?append=${encodeURIComponent(course.id)}`}>追加课件</Link>
+      {searchParams.get("from") === "append" && <p role="status">课件已追加，已有学习记录和任务完成状态已保留。</p>}
       <CourseManagementPanel courseId={course.id} title={course.title} />
 
       {(course.warning || course.warnings.length > 0) && (
@@ -92,7 +94,7 @@ export function CourseDetailPage({ course, sourceReferences = [] }: { course: Co
 
       <section className="detail-section" aria-labelledby="knowledge-heading">
         <div className="detail-section__heading"><h2 id="knowledge-heading">关键知识</h2></div>
-        <SourcedMarkdown markdown={course.keyPointsMarkdown} artifact="course" references={sourceReferences.filter((reference) => reference.sourceUrl.split("#")[0] === `/api/courses/${encodeURIComponent(course.id)}/source`)} />
+        <SourcedMarkdown markdown={course.keyPointsMarkdown} artifact="course" references={sourceReferences.filter((reference) => isCourseSourceUrl(reference.sourceUrl, course.id))} />
       </section>
 
       <section className="detail-section" aria-labelledby="mistakes-heading">

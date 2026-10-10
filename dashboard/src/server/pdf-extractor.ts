@@ -40,18 +40,18 @@ export async function extractPdf(bytes: Uint8Array, filename: string): Promise<E
       throw new PdfImportError("NO_TEXT", "无法从 PDF 提取足够文字；扫描版 PDF 暂不支持，请使用可复制文字的版本");
     }
     const outline: ExtractedDocument["outline"] = [];
-    const bookmarks = [...(await document.getOutline() ?? [])];
-    for (let cursor = 0; cursor < bookmarks.length; cursor += 1) {
-      const item = bookmarks[cursor];
+    const bookmarks = (await document.getOutline() ?? []).map(item => ({ item, level: 1 })).reverse();
+    while (bookmarks.length) {
+      const { item, level } = bookmarks.pop()!;
       // Parent groups often have no page destination but still contain chapters.
-      bookmarks.push(...item.items);
+      bookmarks.push(...item.items.map(child => ({ item: child, level: level + 1 })).reverse());
       try {
         if (!item.dest || !item.title.trim()) continue;
         const destination = typeof item.dest === "string" ? await document.getDestination(item.dest) : item.dest;
         if (!destination?.length) continue;
         const first = destination[0];
         const index = typeof first === "object" && first !== null ? await document.getPageIndex(first) : Number(first);
-        if (Number.isInteger(index) && index >= 0 && index < document.numPages) outline.push({ title: item.title, page: index + 1 });
+        if (Number.isInteger(index) && index >= 0 && index < document.numPages) outline.push({ title: item.title, page: index + 1, level });
       } catch { /* A broken bookmark should not block import. */ }
     }
     const metadata = await document.getMetadata().catch(() => null);

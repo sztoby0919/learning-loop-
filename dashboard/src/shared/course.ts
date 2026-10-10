@@ -1,6 +1,7 @@
 export type CourseId = string;
 
 export interface SourceReference {
+  filename?: string;
   artifact: "course" | "notes";
   /** Zero-based h3 index within course key points, or h2 index within notes. */
   headingIndex: number;

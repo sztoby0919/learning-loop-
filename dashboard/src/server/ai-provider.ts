@@ -19,6 +19,7 @@ export interface AiProvider {
     count: number;
     difficulty: string;
     context: string;
+    instructions?: string;
   }, signal?: AbortSignal): Promise<AssessmentQuestion[]>;
 
   submitAnswer(params: {

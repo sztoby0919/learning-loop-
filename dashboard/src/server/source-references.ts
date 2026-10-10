@@ -15,17 +15,18 @@ import { extractHtml } from "./html-extractor.js";
 import { extractText } from "./text-extractor.js";
 import type { WorkspaceRepository } from "./workspace-repository.js";
 import { readPdfPageText } from "./pdf-text-layout.js";
+import { sourceDocuments, sourceFilePattern } from "./course-bundle-files.js";
 
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 const limits: Record<string, number> = { ".pdf": 100, ".docx": 50, ".html": 20, ".htm": 20, ".md": 10, ".markdown": 10, ".txt": 10 };
 
 // Both routes share the existing managed-course lookup, then reject links and
 // non-files before reading. Never use a path supplied in Markdown or a URL.
-export async function safeSourcePath(repository: WorkspaceRepository, imports: CourseImportManager, courseId: string): Promise<string | null> {
+export async function safeSourcePath(repository: WorkspaceRepository, imports: CourseImportManager, courseId: string, sourceId?: string): Promise<string | null> {
   const configured = repository.config.courses.find((course) => course.id === courseId);
   if (!configured) return null;
-  const candidate = await imports.sourcePath(courseId);
-  if (!candidate || !/^source\.(pdf|docx|md|txt|markdown|html|htm)$/.test(path.basename(candidate))) return null;
+  const candidate = await imports.sourcePath(courseId, sourceId);
+  if (!candidate || !sourceFilePattern.test(path.basename(candidate))) return null;
   const root = path.resolve(configured.root);
   if (path.dirname(path.resolve(candidate)) !== root) return null;
   try {
@@ -58,12 +59,12 @@ function markerPosition(node: RootContent | undefined, extension: string): numbe
   return Number.isSafeInteger(position) && position > 0 && position <= 1000 ? position : null;
 }
 
-function candidates(raw: string, artifact: "course" | "notes", extension: string, courseId: string): Candidate[] {
+function candidates(raw: string, artifact: "course" | "notes", extension: string, courseId: string, sourceId?: string): Candidate[] {
   const parsed = matter(raw);
   if (parsed.data[artifact === "course" ? "id" : "courseId"] !== courseId) return [];
   const nodes = (unified().use(remarkParse).parse(parsed.content) as Root).children;
   const depth = artifact === "course" ? 3 : 2;
-  const provenance = z.object({ version: z.literal(1), entries: z.array(z.object({ headingIndex: z.number().int().min(0).max(59), heading: z.string().min(1).max(100), page: z.number().int().positive(), provenance: z.enum(["source", "ai"]) }).strict()).max(60) }).strict().safeParse(parsed.data.sourceNoteProvenance);
+  const provenance = z.object({ version: z.literal(1), entries: z.array(z.object({ headingIndex: z.number().int().min(0).max(6000), heading: z.string().min(1).max(100), page: z.number().int().positive(), provenance: z.enum(["source", "ai"]), sourceId: z.string().uuid().optional(), encoding: z.enum(["fenced-text-v2", "escaped-line-v1"]).optional() }).strict()).max(6000) }).strict().safeParse(parsed.data.sourceNoteProvenance);
   const validProvenance = provenance.success && new Set(provenance.data.entries.map((item) => item.headingIndex)).size === provenance.data.entries.length ? provenance.data.entries : null;
   let inSection = artifact === "notes";
   let headingIndex = -1;
@@ -75,6 +76,8 @@ function candidates(raw: string, artifact: "course" | "notes", extension: string
     }
     if (!inSection || node.type !== "heading" || node.depth !== depth) continue;
     headingIndex += 1;
+    const entry = validProvenance?.find((entry) => entry.headingIndex === headingIndex && entry.heading === textOf(node).trim());
+    if (sourceId && (sourceId === "legacy" ? entry?.sourceId !== undefined : entry?.sourceId !== sourceId)) continue;
     const marker = nodes[index + 1];
     const position = markerPosition(marker, extension);
     if (position === null) continue;
@@ -88,9 +91,10 @@ function candidates(raw: string, artifact: "course" | "notes", extension: string
     const body = parsed.content.slice(marker.position?.end.offset ?? end, end).trim();
     // Reverse only the importer's explicitly versioned encoding. Preserve all
     // original # characters and backslashes; legacy Markdown stays untouched.
-    let text = parsed.data.sourceExcerptEncoding === "escaped-line-v1"
+    const encoding = entry?.encoding ?? parsed.data.sourceExcerptEncoding;
+    let text = encoding === "escaped-line-v1"
       ? body.replace(/^\\#/, "#").replace(/\\\\/g, "\\") : body;
-    if (parsed.data.sourceExcerptEncoding === "fenced-text-v2") {
+    if (encoding === "fenced-text-v2") {
       const blocks = (unified().use(remarkParse).parse(body) as Root).children;
       text = blocks.length === 1 && blocks[0].type === "code" && blocks[0].lang === "text" ? blocks[0].value : "";
     }
@@ -101,17 +105,17 @@ function candidates(raw: string, artifact: "course" | "notes", extension: string
       aiDerived: parsed.data.sourceNoteProvenance !== undefined ? !validProvenance?.some((item) => item.headingIndex === headingIndex && item.heading === textOf(node).trim() && item.page === position && item.provenance === "source") : parsed.data.aiStatus !== "not-used",
       text: normalize(text),
     });
-    if (result.length >= 60) break;
+    if (result.length >= 6000) break;
   }
   return result;
 }
 
-async function readCandidates(root: string, artifact: "course" | "notes", extension: string, courseId: string): Promise<Candidate[]> {
+async function readCandidates(root: string, artifact: "course" | "notes", extension: string, courseId: string, sourceId?: string): Promise<Candidate[]> {
   const filename = path.join(root, `${artifact}.md`);
   try {
     const details = await lstat(filename);
-    if (!details.isFile() || details.isSymbolicLink() || details.size > 2 * 1024 * 1024 || path.dirname(await realpath(filename)) !== root) return [];
-    return candidates(await readFile(filename, "utf8"), artifact, extension, courseId);
+    if (!details.isFile() || details.isSymbolicLink() || details.size > 10 * 1024 * 1024 || path.dirname(await realpath(filename)) !== root) return [];
+    return candidates(await readFile(filename, "utf8"), artifact, extension, courseId, sourceId);
   } catch { return []; }
 }
 
@@ -152,11 +156,21 @@ async function sourceTexts(sourcePath: string, positions: number[]): Promise<Map
 }
 
 export async function readSourceReferences(repository: WorkspaceRepository, imports: CourseImportManager, courseId: string): Promise<SourceReference[]> {
-  const sourcePath = await safeSourcePath(repository, imports, courseId);
+  const configured = repository.config.courses.find((course) => course.id === courseId);
+  if (!configured) return [];
+  let documents;
+  try { documents = sourceDocuments(await readFile(path.join(configured.root, "course.md"), "utf8")); } catch { return []; }
+  if (!documents.length) return readDocumentReferences(repository, imports, courseId);
+  const references: SourceReference[] = [];
+  for (const document of documents) references.push(...await readDocumentReferences(repository, imports, courseId, document.id, document.filename));
+  return references;
+}
+async function readDocumentReferences(repository: WorkspaceRepository, imports: CourseImportManager, courseId: string, sourceId?: string, filename?: string): Promise<SourceReference[]> {
+  const sourcePath = await safeSourcePath(repository, imports, courseId, sourceId);
   if (!sourcePath) return [];
   const root = path.dirname(sourcePath);
   const extension = path.extname(sourcePath);
-  const references = (await Promise.all((["course", "notes"] as const).map((artifact) => readCandidates(root, artifact, extension, courseId)))).flat();
+  const references = (await Promise.all((["course", "notes"] as const).map((artifact) => readCandidates(root, artifact, extension, courseId, sourceId)))).flat();
   if (!references.length) return [];
   let texts: Map<number, string[]>;
   try { texts = await sourceTexts(sourcePath, references.map((reference) => reference.position)); }
@@ -167,7 +181,8 @@ export async function readSourceReferences(repository: WorkspaceRepository, impo
     const kind = extension === ".pdf" ? "pdf-page" : "virtual-position";
     return [{
       ...reference, kind,
-      sourceUrl: `/api/courses/${encodeURIComponent(courseId)}/source${kind === "pdf-page" ? `#page=${reference.position}` : ""}`,
+      ...(filename ? { filename } : {}),
+      sourceUrl: `/api/courses/${encodeURIComponent(courseId)}/${sourceId ? `sources/${sourceId}` : "source"}${kind === "pdf-page" ? `#page=${reference.position}` : ""}`,
       // Verify the entire candidate before truncating; a matching prefix must
       // not hide an invented continuation beyond the 500-character limit.
       verifiedExcerpt: !reference.aiDerived && text && extracted.some((variant) => variant.includes(text)) ? text.slice(0, 500) : null,

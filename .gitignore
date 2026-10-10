@@ -19,3 +19,14 @@ dashboard.config.json
 !.env.example
 learning-journal/
 .learning-loop/
+.superpowers/
+.playwright-mcp/
+.zhanlu/
+submission-prep/
+zhanlu-evidence/
+zhanlu.json
+dashboard/*.log
+dashboard/.*test-tmp/
+dashboard/scripts/mcp/
+/*.mp4
+examples/demo-course/sessions/
