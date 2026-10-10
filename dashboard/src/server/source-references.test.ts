@@ -1,6 +1,5 @@
 // @vitest-environment node
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import JSZip from "jszip";
@@ -8,6 +7,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "./app.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { CourseEventBus } from "./course-events.js";
 import { buildCourseFiles, createBasicDraft } from "./course-import.js";
 import { CourseImportManager } from "./course-import-manager.js";
@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 async function setup() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-references-"));
+  const root = await canonicalTempRoot("learning-loop-references-");
   roots.push(root);
   const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, () => "2026-09-29");
   const events = new CourseEventBus();

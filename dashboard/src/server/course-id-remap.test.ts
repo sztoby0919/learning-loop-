@@ -2,11 +2,11 @@
 import matter from "gray-matter";
 import { describe, expect, it } from "vitest";
 import { remapCourseFiles } from "./course-id-remap.js";
+import { canonicalTempRoot } from "./native-test-support.js";
 import { renderAttemptSession } from "./session-records.js";
 import { readMistakes } from "./session-records.js";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 describe("structural course ID remapping", () => {
   it("changes only association fields and the exact resources URL cell, preserving prose, dates and evidence", () => {
     const note = `---\ncourseId: old-id\nupdated: 2026-09-30\n---\n# old-id\n普通笔记 /api/courses/old-id/source#page=4 不要改\n`;
@@ -32,7 +32,7 @@ describe("structural course ID remapping", () => {
     expect(mapped).toContain("| 示例 | PDF | /api/courses/old-id/source |");
   });
   it("keeps computed mistake IDs stable so later practice still attaches after restore", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-evidence-"));
+    const root = await canonicalTempRoot("learning-loop-evidence-");
     try {
       await mkdir(path.join(root, "sessions"));
       const question = { question: "证据", options: ["1", "2", "3", "4"], selected: "A" as const, correct: "B" as const, explanation: "解析", knowledgePoint: "主题" };

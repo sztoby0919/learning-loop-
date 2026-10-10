@@ -54,7 +54,7 @@ export function createApp(repository: WorkspaceRepository, events: CourseEventBu
   app.delete("/api/courses/:id", async (request, response, next) => {
     try { response.json(await management.mutate(request.params.id as string, request.body, true)); } catch (error) { next(error); }
   });
-  app.use("/api/restores", async (_request, _response, next) => { try { if (!restores) throw new BackupError("ZIP 恢复不可用：请在 Windows 上检查文件辅助进程与事务目录", 503); await backupFileIo.available(); next(); } catch (error) { next(error); } });
+  app.use("/api/restores", async (_request, _response, next) => { try { if (!restores) throw new BackupError("ZIP 恢复不可用：请检查原生文件辅助进程与事务目录", 503); await backupFileIo.available(); next(); } catch (error) { next(error); } });
 
   if (restores) {
     const uploadZip = multer({ storage: multer.memoryStorage(), limits: { fileSize: BACKUP_LIMITS.compressedBytes, files: 1, fields: 0, parts: 1 }, fileFilter: (_request, file, callback) => callback(null, /\.zip$/i.test(file.originalname)) });

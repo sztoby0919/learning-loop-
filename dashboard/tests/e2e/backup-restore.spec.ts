@@ -1,6 +1,5 @@
 import { once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import os from "node:os";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { createApp } from "../../src/server/app.js";
@@ -9,9 +8,10 @@ import { CourseImportManager } from "../../src/server/course-import-manager.js";
 import { CourseRestoreManager } from "../../src/server/course-restore.js";
 import { BackupZipCodec } from "../../src/server/backup-zip.js";
 import { WorkspaceRepository } from "../../src/server/workspace-repository.js";
+import { canonicalTempDirectory, canonicalTempRoot } from "../../src/server/native-test-support.js";
 
 test("备份 ZIP 后预览恢复为新课程，原课件可打开，取消不发布", async ({ page }) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-backup-e2e-"));
+  const root = await canonicalTempRoot("learning-loop-backup-e2e-");
   const today = () => "2026-10-02"; const repository = new WorkspaceRepository({ configPath: path.join(root, "config.json"), courses: [] }, today);
   const events = new CourseEventBus(); const imports = new CourseImportManager({ root, repository, events, today, watchCourse: () => {} });
   const restores = new CourseRestoreManager({ root, repository, events, codec: new BackupZipCodec(), watchCourse: () => {} });
@@ -54,7 +54,7 @@ test("备份 ZIP 后预览恢复为新课程，原课件可打开，取消不发
     server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()));
     imports.stopScheduledCleanup(); restores.stopScheduledCleanup();
     const resolved = path.resolve(root);
-    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith("learning-loop-backup-e2e-")) throw new Error("Unsafe cleanup");
+    if (path.dirname(resolved) !== await canonicalTempDirectory() || !path.basename(resolved).startsWith("learning-loop-backup-e2e-")) throw new Error("Unsafe cleanup");
     await rm(resolved, { recursive: true, force: true });
   }
 });

@@ -1,20 +1,20 @@
 // @vitest-environment node
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile, link } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, readdir, rm, symlink, writeFile, link } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { canonicalTempRoot, linkType, nativeIoSupported } from "./native-test-support.js";
 import { BoundFileIo, type DirectoryOwner } from "./native-file-io.js";
 const roots: string[] = []; const workers: BoundFileIo[] = [];
 const owner: DirectoryOwner = { id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", token: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb", newId: "new-course" };
 afterEach(async () => { await Promise.all(workers.splice(0).map((io) => io.close())); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function setup() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "learning-loop-native-txn-")); roots.push(root); const io = new BoundFileIo(); workers.push(io);
+  const root = await canonicalTempRoot("learning-loop-native-txn-"); roots.push(root); const io = new BoundFileIo(); workers.push(io);
   const source = path.join(root, "stage", "course"); const destination = path.join(root, "journal", "new-course");
   await mkdir(source, { recursive: true }); await mkdir(path.dirname(destination));
   await writeFile(path.join(source, ".learning-loop-restore.json"), JSON.stringify(owner)); await writeFile(path.join(source, "course.md"), "keep");
   return { root, io, source, destination };
 }
-describe.runIf(process.platform === "win32")("bound publication and owned cleanup", () => {
+describe.runIf(nativeIoSupported)("bound publication and owned cleanup", () => {
   it("publishes and rolls back the owned directory without rewriting its files", async () => {
     const { io, source, destination } = await setup(); await io.moveDirectory(source, destination, owner);
     expect(await readFile(path.join(destination, "course.md"), "utf8")).toBe("keep");
@@ -31,7 +31,7 @@ describe.runIf(process.platform === "win32")("bound publication and owned cleanu
   }, 20000);
   it("refuses a linked child before deleting any owned files, never follows the external target", async () => {
     const { root, io, source } = await setup(); const outside = path.join(root, "outside"); await mkdir(outside); await writeFile(path.join(outside, "sentinel.md"), "private");
-    await symlink(outside, path.join(source, "linked"), "junction"); await expect(io.removeDirectory(source, owner)).rejects.toThrow(/链接|reparse/);
+    await symlink(outside, path.join(source, "linked"), linkType()); await expect(io.removeDirectory(source, owner)).rejects.toThrow(/链接|reparse/);
     expect(await readFile(path.join(source, "course.md"), "utf8")).toBe("keep"); expect(await readFile(path.join(outside, "sentinel.md"), "utf8")).toBe("private");
   }, 20000);
   it("removes an owned tree via its held handles", async () => {
@@ -48,7 +48,7 @@ describe.runIf(process.platform === "win32")("bound publication and owned cleanu
   }, 20000);
   it("refuses a replaced destination parent junction without publishing outside", async () => {
     const { root, io, source } = await setup(); const outside = path.join(root, "outside"); await mkdir(outside); await writeFile(path.join(outside, "sentinel.md"), "private");
-    const parent = path.join(root, "redirect"); await symlink(outside, parent, "junction");
+    const parent = path.join(root, "redirect"); await symlink(outside, parent, linkType());
     await expect(io.moveDirectory(source, path.join(parent, "new-course"), owner)).rejects.toThrow(/链接|reparse/);
     expect(await readdir(outside)).toEqual(["sentinel.md"]); expect(await readFile(path.join(source, "course.md"), "utf8")).toBe("keep");
   }, 20000);
